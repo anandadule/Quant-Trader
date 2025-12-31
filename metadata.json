@@ -1,0 +1,5 @@
+{
+  "name": "AI Quant Trader",
+  "description": "A high-fidelity AI-powered trading simulator that leverages Gemini Pro to analyze market trends and execute simulated trades in real-time.",
+  "requestFramePermissions": []
+}
