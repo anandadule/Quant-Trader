@@ -9,6 +9,8 @@ export interface PriceData {
   volume: number;
   sma10?: number;
   sma20?: number;
+  ema9?: number;
+  ema20?: number;
   rsi?: number;
 }
 
@@ -20,6 +22,8 @@ export interface Trade {
   leverage: number;
   timestamp: Date;
   reasoning: string;
+  pnl?: number;
+  symbol?: string;
 }
 
 export interface Portfolio {
@@ -47,6 +51,13 @@ export enum TradingMode {
   AUTO = 'AUTO'
 }
 
+export enum Strategy {
+  AI_GEMINI = 'AI_GEMINI',
+  RSI_MOMENTUM = 'RSI_MOMENTUM',
+  SMA_CROSSOVER = 'SMA_CROSSOVER',
+  EMA_CROSSOVER = 'EMA_CROSSOVER'
+}
+
 export interface GroundingSource {
   title: string;
   uri: string;
@@ -58,4 +69,5 @@ export interface AIAnalysis {
   reasoning: string;
   suggestedPrice?: number;
   sources?: GroundingSource[];
+  strategyUsed?: string;
 }

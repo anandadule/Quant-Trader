@@ -11,12 +11,23 @@ const SEED_PRICES: Record<string, number> = {
   'BNBUSDT': 650.00,
   'XRPUSDT': 2.45,
   'DOGEUSDT': 0.35,
-  'ADAUSDT': 1.10
+  'ADAUSDT': 1.10,
+  'NIFTY': 24350.25,
+  'BANKNIFTY': 52420.80
 };
 
+const isCrypto = (symbol: string) => symbol.endsWith('USDT');
+
 const calculateIndicators = (data: PriceData[]): PriceData[] => {
+  let prevEma9 = 0;
+  let prevEma20 = 0;
+  const k9 = 2 / (9 + 1);
+  const k20 = 2 / (20 + 1);
+
   return data.map((item, index) => {
     const updatedItem = { ...item };
+
+    // SMA Calculations
     if (index >= 9) {
       const slice = data.slice(index - 9, index + 1);
       updatedItem.sma10 = slice.reduce((sum, p) => sum + p.price, 0) / 10;
@@ -25,6 +36,20 @@ const calculateIndicators = (data: PriceData[]): PriceData[] => {
       const slice = data.slice(index - 19, index + 1);
       updatedItem.sma20 = slice.reduce((sum, p) => sum + p.price, 0) / 20;
     }
+
+    // EMA Calculations
+    if (index === 0) {
+      prevEma9 = item.price;
+      prevEma20 = item.price;
+    } else {
+      prevEma9 = (item.price * k9) + (prevEma9 * (1 - k9));
+      prevEma20 = (item.price * k20) + (prevEma20 * (1 - k20));
+    }
+    
+    if (index > 9) updatedItem.ema9 = prevEma9;
+    if (index > 20) updatedItem.ema20 = prevEma20;
+
+    // RSI Calculation
     if (index >= 14) {
       let gains = 0; let losses = 0;
       for (let i = index - 14; i < index; i++) {
@@ -60,22 +85,11 @@ export const generateInitialData = (count: number = 200, symbol: string = 'BTCUS
   return calculateIndicators(data);
 };
 
-export const updateMarket = (prevData: PriceData[]): PriceData[] => {
-  const lastItem = prevData[prevData.length - 1];
-  const open = lastItem.price;
-  const change = (Math.random() - 0.5) * volatility;
-  const close = open * (1 + change);
-  const now = new Date();
-  const newItem: PriceData = {
-    time: formatTime(now),
-    timestamp: now.getTime() / 1000,
-    price: close, open, high: Math.max(open, close) * 1.001, low: Math.min(open, close) * 0.999,
-    volume: Math.random() * 5
-  };
-  return calculateIndicators([...prevData, newItem].slice(-200));
-};
-
 export const fetchHistoricalData = async (symbol: string, interval: string = '1m', limit: number = 200): Promise<PriceData[]> => {
+  if (!isCrypto(symbol)) {
+    return generateInitialData(limit, symbol, interval);
+  }
+
   try {
     const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
     if (!res.ok) throw new Error();
@@ -92,7 +106,27 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
   }
 };
 
-export const fetchLatestQuote = async (symbol: string, interval: string = '1m'): Promise<PriceData | null> => {
+export const fetchLatestQuote = async (symbol: string, interval: string = '1m', prevData?: PriceData[]): Promise<PriceData | null> => {
+  if (!isCrypto(symbol)) {
+    // If we have previous data, simulate a small move from the last close
+    if (prevData && prevData.length > 0) {
+      const last = prevData[prevData.length - 1];
+      const change = (Math.random() - 0.5) * volatility;
+      const close = last.price * (1 + change);
+      const now = new Date();
+      return {
+        time: formatTime(now),
+        timestamp: now.getTime() / 1000,
+        price: close,
+        open: last.price,
+        high: Math.max(last.price, close) * 1.0005,
+        low: Math.min(last.price, close) * 0.9995,
+        volume: Math.random() * 5
+      };
+    }
+    return null;
+  }
+
   try {
     const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`);
     if (!res.ok) return null;
@@ -107,6 +141,14 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m'):
 };
 
 export const fetchTicker = async (symbol: string): Promise<{ price: number; changePercent: number } | null> => {
+  if (!isCrypto(symbol)) {
+    const base = SEED_PRICES[symbol] || 1000;
+    return {
+      price: base * (1 + (Math.random() - 0.5) * 0.001),
+      changePercent: (Math.random() - 0.5) * 2
+    };
+  }
+
   try {
     const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
     if (!res.ok) throw new Error();
@@ -118,8 +160,8 @@ export const fetchTicker = async (symbol: string): Promise<{ price: number; chan
   } catch {
     const base = SEED_PRICES[symbol] || 1000;
     return {
-      price: base * (1 + (Math.random() - 0.5) * 0.01),
-      changePercent: (Math.random() - 0.5) * 5
+      price: base * (1 + (Math.random() - 0.5) * 0.001),
+      changePercent: (Math.random() - 0.5) * 2
     };
   }
 };

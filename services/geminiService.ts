@@ -1,75 +1,99 @@
+
+import { GoogleGenAI } from "@google/genai";
 import { PriceData, AIAnalysis, GroundingSource } from "../types";
 
 /**
- * Local Quantitative Analysis Engine
- * Performs technical analysis using RSI and SMA crossovers to generate trading signals.
- * This replaces the need for an external Gemini API call while maintaining professional logic.
+ * Gemini-Powered Quantitative Analysis Engine
+ * Uses Gemini 3 Flash to interpret actual chart data and indicators.
  */
 export const analyzeMarket = async (data: PriceData[], symbol: string = 'BTCUSDT'): Promise<AIAnalysis> => {
-  // Simulate a small delay for "thinking" feel
-  await new Promise(resolve => setTimeout(resolve, 800));
-
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  // Extract key metrics for the prompt
   const latest = data[data.length - 1];
-  const rsi = latest.rsi ?? 50;
-  const price = latest.price;
-  const sma20 = latest.sma20 ?? price;
-  const sma10 = latest.sma10 ?? price;
-  const readableSymbol = symbol.replace('USDT', '');
-
-  let action: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
-  let confidence = 0.5;
-  let reasoning = "";
-
-  // 1. RSI Divergence & Extremes
-  if (rsi < 30) {
-    action = 'BUY';
-    confidence = 0.85;
-    reasoning = `Strong oversold conditions detected for ${readableSymbol}. RSI at ${rsi.toFixed(2)} indicates extreme bearish exhaustion. Quantitative models suggest a high probability of a relief bounce from current liquidity zones.`;
-  } else if (rsi > 70) {
-    action = 'SELL';
-    confidence = 0.85;
-    reasoning = `Overbought momentum extension on ${readableSymbol}. RSI at ${rsi.toFixed(2)} signals a local climax. Trend exhaustion is imminent, suggesting a strategic short entry or profit-taking session.`;
-  } else {
-    // 2. Trend Structure (Moving Average Clusters)
-    const isUptrend = sma10 > sma20;
-    const priceAboveSma = price > sma10;
+  const previous = data[data.length - 2] || latest;
+  const recentData = data.slice(-30); // Reduced context slightly for better stability
+  
+  const prompt = `
+    Analyze the following market data for ${symbol}.
     
-    if (isUptrend && priceAboveSma) {
-      action = 'BUY';
-      confidence = 0.68;
-      reasoning = `Bullish trend alignment confirmed. ${readableSymbol} is maintaining price action above the 10 and 20-period SMAs. Volume-weighted momentum remains positive, favoring long continuation.`;
-    } else if (!isUptrend && !priceAboveSma) {
-      action = 'SELL';
-      confidence = 0.68;
-      reasoning = `Bearish trend confirmation. Price structure is currently suppressed under key moving average clusters. Order flow indicates continued distribution to lower support levels.`;
-    } else {
-      action = 'HOLD';
-      confidence = 0.5;
-      reasoning = `Market is currently in a high-compression state with no clear directional bias. ${readableSymbol} is ranging within tight volatility bands. Awaiting high-volume breakout for trend validation.`;
-    }
-  }
+    CURRENT STATE:
+    - Price: ${latest.price}
+    - 24h Change: ${((latest.price - previous.price) / previous.price * 100).toFixed(4)}%
+    - RSI: ${latest.rsi?.toFixed(2) || 'N/A'}
+    - SMA10: ${latest.sma10?.toFixed(2) || 'N/A'}
+    - SMA20: ${latest.sma20?.toFixed(2) || 'N/A'}
+    
+    HISTORICAL CONTEXT (JSON):
+    ${JSON.stringify(recentData.map(d => ({ p: d.price, v: d.volume, r: d.rsi })))}
+    
+    TASK:
+    1. Identify the primary trend (Bullish/Bearish/Neutral).
+    2. Look for RSI divergences or exhaustion levels.
+    3. Check SMA crossovers (Golden/Death cross).
+    4. Use Google Search to find any breaking news or sentiment shifts for ${symbol} that might invalidate technicals.
+    5. Provide a clear BUY, SELL, or HOLD recommendation.
 
-  // Generate "Search Data" links for the Quant Logic UI
-  // This satisfies the requirement to keep Google Search data links available for information.
-  const sources: GroundingSource[] = [
-    { 
-      title: `${readableSymbol} Live News & Market Sentiment`, 
-      uri: `https://www.google.com/search?q=${readableSymbol}+crypto+news+sentiment+today` 
-    },
-    { 
-      title: `${readableSymbol} Technical Levels & Analysis`, 
-      uri: `https://www.google.com/search?q=${readableSymbol}+tradingview+analysis+ideas` 
-    },
+    OUTPUT FORMAT:
+    Respond with a raw JSON object (no markdown formatting, no code blocks).
+    JSON Structure:
     {
-      title: "Global Crypto Volatility Index",
-      uri: `https://www.google.com/search?q=crypto+fear+and+greed+index+realtime`
+      "action": "BUY" | "SELL" | "HOLD",
+      "confidence": number (0.0 to 1.0),
+      "reasoning": "Concise professional explanation"
     }
-  ];
+  `;
 
-  return {
-    action,
-    confidence,
-    reasoning,
-    sources
-  };
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        systemInstruction: "You are a professional Quant Trading Bot. You provide high-probability signals based on technical analysis and real-time market news.",
+        tools: [{ googleSearch: {} }],
+        // responseSchema and responseMimeType removed to prevent conflict with Google Search tool which was causing 500 errors
+      }
+    });
+
+    let text = response.text || "{}";
+    // Clean markdown code blocks if present
+    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch (e) {
+      console.warn("JSON Parse Fallback:", e);
+      // Fallback if strict JSON parsing fails
+      result = {
+        action: 'HOLD',
+        confidence: 0,
+        reasoning: text.substring(0, 300) || "Analysis format invalid."
+      };
+    }
+    
+    // Extract grounding sources if available
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const sources: GroundingSource[] = groundingChunks.map((chunk: any) => ({
+      title: chunk.web?.title || "Market Context",
+      uri: chunk.web?.uri || "#"
+    })).filter((s: GroundingSource) => s.uri !== "#");
+
+    return {
+      action: result.action || 'HOLD',
+      confidence: result.confidence || 0.5,
+      reasoning: result.reasoning || "Failed to parse AI response.",
+      sources: sources.length > 0 ? sources : [
+        { title: "Live Market Data", uri: `https://www.tradingview.com/symbols/${symbol}/` }
+      ]
+    };
+  } catch (error) {
+    console.error("Gemini Analysis Error:", error);
+    return {
+      action: 'HOLD',
+      confidence: 0,
+      reasoning: "AI analysis service error. Reverting to manual monitoring.",
+      sources: []
+    };
+  }
 };
