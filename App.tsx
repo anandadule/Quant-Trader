@@ -2,16 +2,12 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { 
   TrendingUp, 
   Activity, 
-  Wallet, 
   History, 
   Cpu, 
   ArrowUpCircle, 
   ArrowDownCircle, 
   AlertCircle, 
-  PlusCircle, 
   Info, 
-  Globe, 
-  ExternalLink, 
   Target, 
   Ban, 
   Layers, 
@@ -21,19 +17,18 @@ import {
   PieChart,
   Menu,
   X,
-  ChevronRight,
   RotateCcw,
   ArrowUpRight,
   ArrowDownLeft,
   DollarSign,
   CheckCircle2,
   ChevronLeft,
+  ChevronRight,
   Brain,
   Zap,
   LineChart,
   Gauge,
   Filter,
-  Calendar,
   Plus,
   Minus,
   Settings,
@@ -43,12 +38,12 @@ import {
   CreditCard,
   Bell,
   LogOut,
-  Edit3
+  Edit3,
+  Globe
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradingChart } from './components/TradingChart';
 import { PriceData, Trade, Portfolio, TradingMode, AIAnalysis, EquityPoint, WatchlistItem, Strategy } from './types';
-// Fixed: Removed non-existent export 'updateMarket'
 import { 
   fetchHistoricalData, 
   fetchLatestQuote, 
@@ -64,12 +59,13 @@ const MAINTENANCE_MARGIN_PCT = 0.05;
 const AVAILABLE_PAIRS = [
   { symbol: 'BTCUSDT', name: 'BTC/USD' },
   { symbol: 'ETHUSDT', name: 'ETH/USD' },
+  { symbol: 'ADAUSDT', name: 'ADA/USD' },
   { symbol: 'NIFTY', name: 'Nifty 50' },
   { symbol: 'BANKNIFTY', name: 'Bank Nifty' },
   { symbol: 'SOLUSDT', name: 'SOL/USD' },
-  { symbol: 'BNBUSDT', name: 'BNB/USD' },
-  { symbol: 'XRPUSDT', name: 'XRP/USD' },
-  { symbol: 'DOGEUSDT', name: 'DOGE/USD' },
+  { symbol: 'RELIANCE', name: 'Reliance' },
+  { symbol: 'TSLA', name: 'Tesla' },
+  { symbol: 'AAPL', name: 'Apple' },
 ];
 
 const getSavedItem = (key: string, defaultValue: any) => {
@@ -110,6 +106,9 @@ export default function App() {
   const [historyPage, setHistoryPage] = useState(1);
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard');
   
+  // Background price state for position when not viewing the same chart
+  const [bgPrice, setBgPrice] = useState<number>(0);
+
   // Profile State
   const [userProfile, setUserProfile] = useState(() => getSavedItem('userProfile', {
     name: 'Anand Adule',
@@ -135,14 +134,61 @@ export default function App() {
   const marketInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const aiInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const notify = useCallback((msg: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setNotifications(prev => [{ msg, type }, ...prev].slice(0, 5));
+  }, []);
+
+  // Symbol Change Handler - Allowed now
+  const handleSymbolChange = useCallback((symbol: string) => {
+    setCurrentSymbol(symbol);
+    setIsSidebarOpen(false);
+    setView('dashboard');
+  }, []);
+
   const currentPrice = useMemo(() => marketData.length > 0 ? marketData[marketData.length - 1].price : 0, [marketData]);
-  const unrealizedPnL = useMemo(() => portfolio.assets !== 0 ? (currentPrice - portfolio.avgEntryPrice) * portfolio.assets : 0, [portfolio.assets, portfolio.avgEntryPrice, currentPrice]);
+
+  // Track background price for active position if it differs from current chart
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    
+    // Reset bgPrice if we switch back to the position symbol or if no position
+    if (!portfolio.positionSymbol || portfolio.positionSymbol === currentSymbol) {
+        setBgPrice(0);
+        return;
+    }
+
+    if (portfolio.assets !== 0 && portfolio.positionSymbol !== currentSymbol) {
+        const fetchBg = async () => {
+            const t = await fetchTicker(portfolio.positionSymbol!);
+            if (t) setBgPrice(t.price);
+        };
+        fetchBg(); // Initial fetch
+        interval = setInterval(fetchBg, 2000); // Update every 2s
+    }
+    return () => clearInterval(interval);
+  }, [portfolio.assets, portfolio.positionSymbol, currentSymbol]);
+
+  // Determine the price to use for PnL calculations
+  const activePositionPrice = useMemo(() => {
+    if (!portfolio.positionSymbol) return 0;
+    // If we are viewing the chart of our position, use the high-frequency chart price
+    if (portfolio.positionSymbol === currentSymbol) return currentPrice;
+    // Otherwise use the background fetched price, fallback to entry if loading
+    return bgPrice || portfolio.avgEntryPrice;
+  }, [portfolio.positionSymbol, currentSymbol, currentPrice, bgPrice, portfolio.avgEntryPrice]);
+  
+  const unrealizedPnL = useMemo(() => {
+    if (portfolio.assets === 0) return 0;
+    return (activePositionPrice - portfolio.avgEntryPrice) * portfolio.assets;
+  }, [portfolio.assets, portfolio.avgEntryPrice, activePositionPrice]);
+
   const marginLocked = useMemo(() => portfolio.assets !== 0 ? Math.abs(portfolio.assets * portfolio.avgEntryPrice) / selectedLeverage : 0, [portfolio.assets, portfolio.avgEntryPrice, selectedLeverage]);
   const equity = useMemo(() => portfolio.cash + marginLocked + unrealizedPnL, [portfolio.cash, marginLocked, unrealizedPnL]);
 
   const estimatedMargin = useMemo(() => {
     const amount = parseFloat(lotSize);
     if (isNaN(amount) || amount <= 0) return 0;
+    // Estimated margin uses CURRENT chart price because that's what we would buy
     return (currentPrice * amount) / selectedLeverage;
   }, [currentPrice, lotSize, selectedLeverage]);
 
@@ -161,7 +207,7 @@ export default function App() {
     if (trades.length === 0) return { winRate: 0, total: 0 };
     const exits = trades.filter(t => t.reasoning.includes("EXIT") || t.reasoning.includes("System Closed"));
     if (exits.length === 0) return { winRate: 0, total: trades.length };
-    const wins = exits.filter(t => t.type === 'SELL');
+    const wins = exits.filter(t => t.pnl && t.pnl > 0);
     return { winRate: (wins.length / exits.length) * 100, total: trades.length };
   }, [trades]);
 
@@ -200,8 +246,11 @@ export default function App() {
     setHistoryPage(1);
   }, [historyFilterType, historyFilterPnL, historyFilterStartDate, historyFilterEndDate]);
 
-  const notify = useCallback((msg: string, type: 'info' | 'success' | 'error' = 'info') => {
-    setNotifications(prev => [{ msg, type }, ...prev].slice(0, 5));
+  // Legacy state migration
+  useEffect(() => {
+    if (portfolio.assets !== 0 && !portfolio.positionSymbol) {
+      setPortfolio(p => ({ ...p, positionSymbol: currentSymbol }));
+    }
   }, []);
 
   const handleResetSystem = useCallback(() => {
@@ -264,7 +313,7 @@ export default function App() {
 
   useEffect(() => {
     const updateWatch = async () => {
-      const updated = await Promise.all(AVAILABLE_PAIRS.map(async (p) => {
+      const updated = await Promise.all(watchlist.map(async (p) => {
         const t = await fetchTicker(p.symbol);
         return t ? { ...p, price: t.price, change24h: t.changePercent } : { ...p, price: 0, change24h: 0 };
       }));
@@ -273,21 +322,35 @@ export default function App() {
     updateWatch();
     const t = setInterval(updateWatch, 2000); 
     return () => clearInterval(t);
-  }, []);
+  }, [watchlist.length]);
 
   const handleExitAll = useCallback(() => {
     setPortfolio(prev => {
       if (Math.abs(prev.assets) < 0.000001) return prev;
-      const price = currentPrice;
+      
+      // We need to use the price of the asset we are closing
+      // If we are on the chart of the asset, use currentPrice, else use the background tracked price
+      let exitPrice = 0;
+      if (prev.positionSymbol === currentSymbol) {
+          exitPrice = currentPrice;
+      } else {
+          // Fallback to bgPrice or just fail safe to entry price if something is really wrong (shouldn't happen with the effects)
+          exitPrice = bgPrice || prev.avgEntryPrice;
+      }
+      
+      // If price is 0 or invalid, critical error prevention
+      if (exitPrice <= 0) exitPrice = prev.avgEntryPrice;
+
       const isLong = prev.assets > 0;
       const amount = Math.abs(prev.assets);
-      const profit = isLong ? (price - prev.avgEntryPrice) * amount : (prev.avgEntryPrice - price) * amount;
+      const profit = isLong ? (exitPrice - prev.avgEntryPrice) * amount : (prev.avgEntryPrice - exitPrice) * amount;
       const mReleased = (prev.avgEntryPrice * amount) / selectedLeverage;
+      
       setTrades(t => {
         const newTrade = { 
           id: Math.random().toString(36).substr(2, 9), 
           type: isLong ? 'SELL' : 'BUY', 
-          price, 
+          price: exitPrice, 
           amount, 
           leverage: selectedLeverage, 
           timestamp: new Date(), 
@@ -297,10 +360,10 @@ export default function App() {
         } as Trade;
         return [newTrade, ...t];
       });
-      notify(`Position Closed: ${amount.toFixed(4)} @ $${price.toLocaleString()} (Profit: $${profit.toFixed(2)})`, profit >= 0 ? 'success' : 'info');
+      notify(`Position Closed: ${amount.toFixed(4)} @ $${exitPrice.toLocaleString()} (Profit: $${profit.toFixed(2)})`, profit >= 0 ? 'success' : 'info');
       return { ...prev, assets: 0, avgEntryPrice: 0, cash: Math.max(0, prev.cash + mReleased + profit) };
     });
-  }, [currentPrice, selectedLeverage, notify]);
+  }, [currentPrice, selectedLeverage, notify, currentSymbol, bgPrice]);
 
   useEffect(() => {
     if (Math.abs(portfolio.assets) > 0) {
@@ -326,11 +389,9 @@ export default function App() {
             if (q) {
                 setMarketData(current => mergeQuote(current, q));
                 setIsLive(true);
-            } else if (!currentSymbol.endsWith('USDT')) {
+            } else {
                 // If simulation failed to return (shouldn't happen), stay live
                 setIsLive(true);
-            } else {
-                setIsLive(false);
             }
         };
         fetchNext();
@@ -343,11 +404,19 @@ export default function App() {
 
   const executeTrade = useCallback((action: 'BUY' | 'SELL', price: number, reasoning: string) => {
     setPortfolio(prev => {
+      // Block trade if trying to trade a different symbol than the active position
+      if (prev.assets !== 0 && prev.positionSymbol !== currentSymbol) {
+          notify(`Cannot trade ${currentSymbol} while holding ${prev.positionSymbol}. Close position first.`, "error");
+          return prev;
+      }
+
       const amount = parseFloat(lotSize);
       if (isNaN(amount) || amount < 0.01) { notify("Minimum lot size is 0.01", "error"); return prev; }
       const marginReq = (price * amount) / selectedLeverage;
       if (prev.cash < marginReq && prev.assets === 0) { notify("Insuff. Funds", "error"); return prev; }
       const isLong = action === 'BUY';
+      
+      // If reversing position, close it first
       if ((isLong && prev.assets < 0) || (!isLong && prev.assets > 0)) { handleExitAll(); return prev; }
       
       setTrades(t => {
@@ -711,14 +780,14 @@ export default function App() {
         <div className="p-6 border-b border-slate-800 hidden md:block">
           <div className="flex items-center gap-4">
             <div className="p-3 bg-emerald-500 rounded-2xl"><TrendingUp className="w-8 h-8 text-slate-950" /></div>
-            <div><h1 className="text-2xl font-black tracking-tighter">Gemini<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Alpha v7.0</span></div>
+            <div><h1 className="text-2xl font-black tracking-tighter">Gemini<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Alpha v11.0</span></div>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2 custom-scrollbar">
           <div className="px-2 mb-1 flex justify-between items-center"><span className="text-[10px] font-black text-slate-500 uppercase">Market Watchlist</span><BarChart4 className="w-4 h-4 text-slate-700" /></div>
           {watchlist.map(item => (
-            <button key={item.symbol} onClick={() => { setCurrentSymbol(item.symbol); setIsSidebarOpen(false); setView('dashboard'); }} className={`w-full p-3 rounded-xl border transition-all text-left ${currentSymbol === item.symbol ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-950/20 border-slate-800 hover:border-slate-700'}`}>
+            <button key={item.symbol} onClick={() => handleSymbolChange(item.symbol)} className={`w-full p-3 rounded-xl border transition-all text-left ${currentSymbol === item.symbol ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-900/20 border-slate-800 hover:border-slate-700'}`}>
               <div className="flex justify-between items-center mb-1">
                 <span className={`text-[11px] font-black ${currentSymbol === item.symbol ? 'text-emerald-400' : 'text-slate-400'}`}>{item.name}</span>
                 <span className={`text-[9px] font-bold ${item.change24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{item.change24h >= 0 ? '+' : ''}{item.change24h.toFixed(2)}%</span>
@@ -824,7 +893,7 @@ export default function App() {
             <div className="flex flex-col xl:grid xl:grid-cols-12 gap-6 md:gap-10 mb-12">
               <div className="order-1 xl:col-span-8 flex flex-col gap-6 md:gap-10">
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-4 md:p-8 lg:p-10 h-[450px] md:h-[600px] lg:h-[700px] shadow-2xl flex flex-col transition-all">
-                  <TradingChart timeframe={timeframe} onTimeframeChange={setTimeframe} currentSymbol={currentSymbol} onSymbolChange={setCurrentSymbol} availablePairs={AVAILABLE_PAIRS} />
+                  <TradingChart timeframe={timeframe} onTimeframeChange={setTimeframe} currentSymbol={currentSymbol} onSymbolChange={handleSymbolChange} availablePairs={AVAILABLE_PAIRS} />
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl">

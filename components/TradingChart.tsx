@@ -44,12 +44,22 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   const currentSymbolName = availablePairs.find(p => p.symbol === currentSymbol)?.name || currentSymbol;
 
   const getFullSymbol = (symbol: string) => {
-    // Specifically handle NSE indices for the TradingView Widget
-    if (symbol === 'NIFTY') return 'NSE:NIFTY';
-    if (symbol === 'BANKNIFTY') return 'NSE:BANKNIFTY';
+    // If it already has a prefix, use it
+    if (symbol.includes(':')) return symbol;
+    
+    const s = symbol.toUpperCase();
+    if (['NIFTY', 'BANKNIFTY', 'RELIANCE', 'HDFCBANK', 'TCS', 'INFY'].includes(s)) {
+        return `NSE:${s}`;
+    }
+    if (['TSLA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'META'].includes(s)) {
+        return `NASDAQ:${s}`;
+    }
+    
     // Binance for all USDT pairs
-    if (symbol.endsWith('USDT')) return `BINANCE:${symbol}`;
-    return symbol;
+    if (s.endsWith('USDT')) return `BINANCE:${s}`;
+    
+    // Default fallback
+    return s;
   };
 
   const toggleFullscreen = () => {
@@ -62,17 +72,14 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     }
   };
 
-  const handleZoomIn = () => {
+  const handleZoom = (direction: 'in' | 'out') => {
     const currentIndex = TIMEFRAMES.indexOf(timeframe);
-    if (currentIndex > 0) {
-      onTimeframeChange(TIMEFRAMES[currentIndex - 1]);
-    }
-  };
+    if (currentIndex === -1) return;
 
-  const handleZoomOut = () => {
-    const currentIndex = TIMEFRAMES.indexOf(timeframe);
-    if (currentIndex < TIMEFRAMES.length - 1) {
-      onTimeframeChange(TIMEFRAMES[currentIndex + 1]);
+    if (direction === 'in' && currentIndex > 0) {
+        onTimeframeChange(TIMEFRAMES[currentIndex - 1]);
+    } else if (direction === 'out' && currentIndex < TIMEFRAMES.length - 1) {
+        onTimeframeChange(TIMEFRAMES[currentIndex + 1]);
     }
   };
 
@@ -80,7 +87,6 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
     };
-
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -104,7 +110,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         toolbar_bg: '#0f172a',
         enable_publishing: false,
         hide_side_toolbar: !showToolbar,
-        allow_symbol_change: false,
+        allow_symbol_change: false, // Dropdown handles this
         container_id: containerId,
         backgroundColor: '#0f172a',
         gridColor: 'rgba(30, 41, 59, 0.1)',
@@ -171,26 +177,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         </div>
 
         <div className="flex items-center gap-2 justify-end flex-1 min-w-0">
-            <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800">
-                <button 
-                    onClick={handleZoomIn}
-                    disabled={TIMEFRAMES.indexOf(timeframe) === 0}
-                    className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400 transition-all"
-                    title="Zoom In (Lower Timeframe)"
-                >
-                    <ZoomIn className="w-3.5 h-3.5" />
-                </button>
-                <button 
-                    onClick={handleZoomOut}
-                    disabled={TIMEFRAMES.indexOf(timeframe) === TIMEFRAMES.length - 1}
-                    className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400 transition-all"
-                    title="Zoom Out (Higher Timeframe)"
-                >
-                    <ZoomOut className="w-3.5 h-3.5" />
-                </button>
-            </div>
-
-            <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800 overflow-x-auto custom-scrollbar max-w-full hidden sm:flex">
+            <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800 hidden sm:flex">
             {TIMEFRAMES.map((tf) => (
                 <button
                 key={tf}
@@ -206,17 +193,30 @@ export const TradingChart: React.FC<TradingChartProps> = ({
             ))}
             </div>
 
-            <button 
-                onClick={toggleFullscreen}
-                className="p-2 bg-slate-800 border border-slate-700/50 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-700 transition-all shadow-md active:scale-95 shrink-0"
-                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-            >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-            </button>
+            <div className="flex items-center gap-1">
+                <button 
+                    onClick={() => handleZoom('in')}
+                    className="p-2 bg-slate-800 border border-slate-700/50 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-700 transition-all shadow-md active:scale-95 shrink-0"
+                >
+                    <ZoomIn className="w-4 h-4" />
+                </button>
+                <button 
+                    onClick={() => handleZoom('out')}
+                    className="p-2 bg-slate-800 border border-slate-700/50 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-700 transition-all shadow-md active:scale-95 shrink-0"
+                >
+                    <ZoomOut className="w-4 h-4" />
+                </button>
+                <button 
+                    onClick={toggleFullscreen}
+                    className="p-2 bg-slate-800 border border-slate-700/50 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-700 transition-all shadow-md active:scale-95 shrink-0"
+                >
+                    {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                </button>
+            </div>
         </div>
       </div>
 
-      <div className="flex-1 w-full relative min-h-[350px] lg:min-h-0" ref={containerRef}>
+      <div className="flex-1 w-full relative min-h-[350px]" ref={containerRef}>
         <div id={containerId} className="absolute inset-0 w-full h-full rounded-xl overflow-hidden border border-slate-800 bg-slate-950 shadow-inner" />
         <div className="absolute bottom-0 left-0 w-40 h-10 bg-[#0f172a] z-50 pointer-events-auto rounded-bl-xl" />
       </div>

@@ -13,10 +13,23 @@ const SEED_PRICES: Record<string, number> = {
   'DOGEUSDT': 0.35,
   'ADAUSDT': 1.10,
   'NIFTY': 24350.25,
-  'BANKNIFTY': 52420.80
+  'NSE:NIFTY': 24350.25,
+  'BANKNIFTY': 52420.80,
+  'NSE:BANKNIFTY': 52420.80
 };
 
-const isCrypto = (symbol: string) => symbol.endsWith('USDT');
+const isCrypto = (symbol: string) => symbol.endsWith('USDT') || symbol.includes('BTC') || symbol.includes('ETH');
+
+// Fallback for unknown symbols to ensure the UI never breaks
+const getSeedPrice = (symbol: string): number => {
+  if (SEED_PRICES[symbol]) return SEED_PRICES[symbol];
+  // Generate a deterministic seed based on symbol string
+  let hash = 0;
+  for (let i = 0; i < symbol.length; i++) {
+    hash = symbol.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash % 5000) + 100; // Random price between 100 and 5100
+};
 
 const calculateIndicators = (data: PriceData[]): PriceData[] => {
   let prevEma9 = 0;
@@ -66,7 +79,7 @@ const calculateIndicators = (data: PriceData[]): PriceData[] => {
 const formatTime = (date: Date): string => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 export const generateInitialData = (count: number = 200, symbol: string = 'BTCUSDT', timeframe: string = '1m'): PriceData[] => {
-  let prevPrice = SEED_PRICES[symbol] || 1000;
+  let prevPrice = getSeedPrice(symbol);
   const data: PriceData[] = [];
   const now = Date.now();
   const step = 60000;
@@ -86,7 +99,7 @@ export const generateInitialData = (count: number = 200, symbol: string = 'BTCUS
 };
 
 export const fetchHistoricalData = async (symbol: string, interval: string = '1m', limit: number = 200): Promise<PriceData[]> => {
-  if (!isCrypto(symbol)) {
+  if (!symbol.endsWith('USDT')) {
     return generateInitialData(limit, symbol, interval);
   }
 
@@ -107,8 +120,7 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
 };
 
 export const fetchLatestQuote = async (symbol: string, interval: string = '1m', prevData?: PriceData[]): Promise<PriceData | null> => {
-  if (!isCrypto(symbol)) {
-    // If we have previous data, simulate a small move from the last close
+  if (!symbol.endsWith('USDT')) {
     if (prevData && prevData.length > 0) {
       const last = prevData[prevData.length - 1];
       const change = (Math.random() - 0.5) * volatility;
@@ -141,8 +153,8 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
 };
 
 export const fetchTicker = async (symbol: string): Promise<{ price: number; changePercent: number } | null> => {
-  if (!isCrypto(symbol)) {
-    const base = SEED_PRICES[symbol] || 1000;
+  if (!symbol.endsWith('USDT')) {
+    const base = getSeedPrice(symbol);
     return {
       price: base * (1 + (Math.random() - 0.5) * 0.001),
       changePercent: (Math.random() - 0.5) * 2
@@ -158,7 +170,7 @@ export const fetchTicker = async (symbol: string): Promise<{ price: number; chan
       changePercent: parseFloat(data.priceChangePercent)
     };
   } catch {
-    const base = SEED_PRICES[symbol] || 1000;
+    const base = getSeedPrice(symbol);
     return {
       price: base * (1 + (Math.random() - 0.5) * 0.001),
       changePercent: (Math.random() - 0.5) * 2
