@@ -817,6 +817,14 @@ export default function App() {
                       <Target className="w-6 h-6" /> Open Positions
                     </h3>
                     <div className="flex items-center gap-3">
+                       {portfolio.positions.length > 0 && (
+                          <div className={`text-sm font-black mono px-3 py-1.5 rounded-lg border flex items-center gap-2 ${totalUnrealizedPnL >= 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
+                              <span>{totalUnrealizedPnL >= 0 ? '+' : ''}${totalUnrealizedPnL.toFixed(2)}</span>
+                              <span className="opacity-75">
+                                ({totalMarginLocked > 0 ? ((totalUnrealizedPnL / totalMarginLocked) * 100).toFixed(2) : '0.00'}%)
+                              </span>
+                          </div>
+                       )}
                        <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isOpenPositionsExpanded ? 'rotate-180' : ''}`}>
                             <ChevronDown className="w-4 h-4" />
                        </button>
