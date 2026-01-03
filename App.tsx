@@ -945,7 +945,7 @@ export default function App() {
             </header>
 
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 mb-8 md:mb-12">
-              <div className="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl flex flex-col gap-6">
+              <div className="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl flex flex-col gap-6">
                 <h3 className="text-[10px] font-black text-slate-500 uppercase flex items-center gap-3"><PieChart className="w-4 h-4" /> Operations Audit</h3>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-1">
                   <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Alpha Win Rate</span><div className="text-lg md:text-2xl font-black text-emerald-400">{stats.winRate.toFixed(1)}%</div></div>
@@ -958,7 +958,7 @@ export default function App() {
 
             <div className="flex flex-col xl:grid xl:grid-cols-12 gap-6 md:gap-10 mb-12">
               <div className="order-1 xl:col-span-8 flex flex-col gap-6 md:gap-10">
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-4 md:p-8 lg:p-10 h-[450px] md:h-[600px] lg:h-[700px] shadow-2xl flex flex-col transition-all">
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-4 md:p-8 shadow-2xl flex flex-col transition-all h-[450px] md:h-[600px] lg:h-[700px]">
                   <TradingChart 
                     timeframe={timeframe} 
                     onTimeframeChange={setTimeframe} 
@@ -969,7 +969,7 @@ export default function App() {
                   />
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl transition-all">
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl transition-all">
                   <div 
                     className="flex items-center justify-between cursor-pointer group mb-6"
                     onClick={() => setIsOpenPositionsExpanded(!isOpenPositionsExpanded)}
@@ -1140,7 +1140,7 @@ export default function App() {
               </div>
 
               <div className="order-2 xl:col-span-4 flex flex-col gap-6 md:gap-10">
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-5 md:p-8 lg:p-10 shadow-2xl xl:sticky xl:top-10">
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-5 md:p-8 shadow-2xl xl:sticky xl:top-10">
                   <h3 className="font-black text-xl mb-6 md:mb-10 flex justify-between items-center"><span>Order Management</span><span className="text-[10px] font-black text-slate-600 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800/50">SECURED SIM</span></h3>
                   <div className="flex flex-col gap-6 md:gap-10">
                     <div>
@@ -1214,7 +1214,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl transition-all">
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl transition-all">
                   <div 
                     className="flex items-center justify-between cursor-pointer group mb-2" 
                     onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
@@ -1348,15 +1348,36 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 h-[300px] md:h-[400px] relative overflow-hidden shadow-2xl mb-12">
+            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 h-[300px] md:h-[400px] relative overflow-hidden shadow-2xl mb-12">
               <h3 className="text-[10px] font-black text-slate-500 uppercase mb-6 flex items-center gap-3"><Activity className="w-4 h-4" /> Global Performance Graph</h3>
               <div className="w-full h-full pb-8">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={equityHistory}>
+                  <AreaChart data={equityHistory} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                     <defs><linearGradient id="eqG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient></defs>
                     <Area type="monotone" dataKey="equity" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#eqG)" isAnimationActive={false} />
-                    <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '10px' }} />
-                    <XAxis dataKey="timestamp" hide /><YAxis hide domain={['auto', 'auto']} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '10px', color: '#f8fafc' }} 
+                      labelFormatter={(val) => new Date(val).toLocaleString()}
+                      formatter={(val: number) => [`$${val.toFixed(2)}`, 'Equity']}
+                    />
+                    <XAxis 
+                      dataKey="timestamp" 
+                      tickFormatter={(val) => new Date(val).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      stroke="#334155"
+                      tick={{ fill: '#64748b', fontSize: 10 }}
+                      tickLine={false}
+                      axisLine={false}
+                      minTickGap={50}
+                    />
+                    <YAxis 
+                      domain={['auto', 'auto']}
+                      stroke="#334155"
+                      tick={{ fill: '#64748b', fontSize: 10 }}
+                      tickFormatter={(val) => `$${val}`}
+                      tickLine={false}
+                      axisLine={false}
+                      width={60}
+                    />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
