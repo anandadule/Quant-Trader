@@ -893,7 +893,14 @@ export default function App() {
             <div className="flex flex-col xl:grid xl:grid-cols-12 gap-6 md:gap-10 mb-12">
               <div className="order-1 xl:col-span-8 flex flex-col gap-6 md:gap-10">
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-4 md:p-8 lg:p-10 h-[450px] md:h-[600px] lg:h-[700px] shadow-2xl flex flex-col transition-all">
-                  <TradingChart timeframe={timeframe} onTimeframeChange={setTimeframe} currentSymbol={currentSymbol} onSymbolChange={handleSymbolChange} availablePairs={AVAILABLE_PAIRS} />
+                  <TradingChart 
+                    timeframe={timeframe} 
+                    onTimeframeChange={setTimeframe} 
+                    currentSymbol={currentSymbol} 
+                    onSymbolChange={handleSymbolChange} 
+                    availablePairs={AVAILABLE_PAIRS}
+                    activeStrategy={activeStrategy}
+                  />
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl">

@@ -1,6 +1,6 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { BarChart3, ChevronDown, Maximize, Minimize, PenTool, ZoomIn, ZoomOut } from 'lucide-react';
+import { Strategy } from '../types';
 
 interface TradingChartProps {
   timeframe: string;
@@ -8,6 +8,7 @@ interface TradingChartProps {
   currentSymbol: string;
   onSymbolChange: (symbol: string) => void;
   availablePairs: { symbol: string; name: string }[];
+  activeStrategy: Strategy;
 }
 
 declare global {
@@ -32,7 +33,8 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   onTimeframeChange,
   currentSymbol,
   onSymbolChange,
-  availablePairs
+  availablePairs,
+  activeStrategy
 }) => {
   const containerId = 'tradingview_widget_container';
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
@@ -60,6 +62,31 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     
     // Default fallback
     return s;
+  };
+
+  const getStudies = () => {
+    switch (activeStrategy) {
+      case Strategy.RSI_MOMENTUM:
+        return [
+          'RSI@tv-basicstudies'
+        ];
+      case Strategy.SMA_CROSSOVER:
+        // Attempt to pass configuration for 10 and 20 SMA
+        return [
+          { id: 'MASimple@tv-basicstudies', inputs: { length: 10 } },
+          { id: 'MASimple@tv-basicstudies', inputs: { length: 20 } }
+        ];
+      case Strategy.EMA_CROSSOVER:
+        // Attempt to pass configuration for 9 and 20 EMA
+        return [
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 9 } },
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 20 } }
+        ];
+      case Strategy.AI_GEMINI:
+      default:
+        // Default set for AI analysis
+        return ['RSI@tv-basicstudies', 'MASimple@tv-basicstudies', 'MACD@tv-basicstudies'];
+    }
   };
 
   const toggleFullscreen = () => {
@@ -114,10 +141,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         container_id: containerId,
         backgroundColor: '#0f172a',
         gridColor: 'rgba(30, 41, 59, 0.1)',
-        studies: [
-          'RSI@tv-basicstudies',
-          'MASimple@tv-basicstudies'
-        ],
+        studies: getStudies(),
         disabled_features: [
           'header_symbol_search',
           'header_compare',
@@ -126,7 +150,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         ],
       });
     }
-  }, [currentSymbol, timeframe, showToolbar]);
+  }, [currentSymbol, timeframe, showToolbar, activeStrategy]);
 
   return (
     <div 
