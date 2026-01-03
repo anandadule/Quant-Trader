@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   TrendingUp, 
@@ -52,7 +51,7 @@ import { PriceData, Trade, Portfolio, TradingMode, AIAnalysis, EquityPoint, Watc
 import { 
   fetchHistoricalData, 
   fetchLatestQuote, 
-  fetchTicker,
+  fetchTicker, 
   mergeQuote 
 } from './services/marketSim';
 import { analyzeMarket } from './services/geminiService';
@@ -111,8 +110,10 @@ export default function App() {
   const [historyPage, setHistoryPage] = useState(1);
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard');
   
-  // New state for Trade History expansion
+  // Expand/Collapse States
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(() => getSavedItem('isHistoryExpanded', true));
+  const [isOpenPositionsExpanded, setIsOpenPositionsExpanded] = useState<boolean>(() => getSavedItem('isOpenPositionsExpanded', true));
+  const [isNeuralAnalysisExpanded, setIsNeuralAnalysisExpanded] = useState<boolean>(() => getSavedItem('isNeuralAnalysisExpanded', true));
 
   // Profile State
   const [userProfile, setUserProfile] = useState(() => getSavedItem('userProfile', {
@@ -441,9 +442,11 @@ export default function App() {
       equityHistory, 
       activeStrategy, 
       userProfile, 
-      isHistoryExpanded // Persist expanded state
+      isHistoryExpanded,
+      isOpenPositionsExpanded,
+      isNeuralAnalysisExpanded
     }));
-  }, [portfolio, trades, selectedLeverage, mode, currentSymbol, stopLossPct, takeProfitPct, lotSize, equityHistory, activeStrategy, userProfile, isHistoryExpanded]);
+  }, [portfolio, trades, selectedLeverage, mode, currentSymbol, stopLossPct, takeProfitPct, lotSize, equityHistory, activeStrategy, userProfile, isHistoryExpanded, isOpenPositionsExpanded, isNeuralAnalysisExpanded]);
 
   const getStrategyIcon = (s: Strategy) => {
     switch(s) {
@@ -805,63 +808,100 @@ export default function App() {
                   />
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl">
-                  <h3 className="font-black text-xl mb-8 flex items-center gap-4 text-emerald-400"><Target className="w-6 h-6" /> Open Positions</h3>
-                  {portfolio.positions.length > 0 ? (
-                    <div className="overflow-x-auto custom-scrollbar pb-4">
-                      <table className="w-full text-left min-w-[600px]">
-                        <thead><tr className="text-[11px] uppercase font-black text-slate-500 border-b border-slate-800"><th className="pb-6 pl-4">Asset Matrix</th><th className="pb-6">Quantity</th><th className="pb-6">Entry Zone</th><th className="pb-6">Liq. Level</th><th className="pb-6">Delta PnL</th><th className="pb-6 pr-4 text-right">Ops</th></tr></thead>
-                        <tbody className="text-sm font-bold">
-                          {portfolio.positions.map(pos => {
-                             const mark = priceMap[pos.symbol] || pos.entryPrice;
-                             const diff = mark - pos.entryPrice;
-                             const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
-                             
-                             const marginLocked = (pos.entryPrice * pos.amount) / pos.leverage;
-                             const liqPrice = pos.type === 'LONG' 
-                                ? pos.entryPrice * (1 - (1/pos.leverage) + 0.005) 
-                                : pos.entryPrice * (1 + (1/pos.leverage) - 0.005);
-                             
-                             return (
-                              <tr key={pos.id} className="border-b border-slate-800/40">
-                                <td className="py-8 pl-4 flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${pos.type === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`} />{pos.symbol}</td>
-                                <td className="py-8 mono text-slate-200">{pos.amount}</td>
-                                <td className="py-8 mono text-slate-400">${pos.entryPrice.toLocaleString()}</td>
-                                <td className="py-8 mono text-rose-400">${liqPrice > 0 ? liqPrice.toLocaleString(undefined, { maximumFractionDigits: 1 }) : 'N/A'}</td>
-                                <td className={`py-8 mono ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                  {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-                                  <span className="text-[10px] ml-1 opacity-75">
-                                    ({marginLocked > 0 ? ((pnl / marginLocked) * 100).toFixed(2) : '0.00'}%)
-                                  </span>
-                                </td>
-                                <td className="py-8 pr-4 text-right"><button onClick={() => handleClosePosition(pos.id)} className="px-6 py-3 bg-slate-800 hover:bg-rose-500 hover:text-white text-[10px] font-black rounded-xl transition-all uppercase tracking-widest">Close</button></td>
-                              </tr>
-                             );
-                          })}
-                        </tbody>
-                      </table>
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-10 shadow-2xl transition-all">
+                  <div 
+                    className="flex items-center justify-between cursor-pointer group mb-6"
+                    onClick={() => setIsOpenPositionsExpanded(!isOpenPositionsExpanded)}
+                  >
+                    <h3 className="font-black text-xl flex items-center gap-4 text-emerald-400">
+                      <Target className="w-6 h-6" /> Open Positions
+                    </h3>
+                    <div className="flex items-center gap-3">
+                       <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isOpenPositionsExpanded ? 'rotate-180' : ''}`}>
+                            <ChevronDown className="w-4 h-4" />
+                       </button>
                     </div>
-                  ) : (<div className="py-20 text-center text-slate-600 uppercase font-black text-xs tracking-[0.2em] opacity-30"><Layers className="w-16 h-16 mx-auto mb-6" /> No Active Signal Detected</div>)}
+                  </div>
+
+                  {isOpenPositionsExpanded && (
+                      <div className="animate-slide-up">
+                        {portfolio.positions.length > 0 ? (
+                            <>
+                            <div className="overflow-x-auto custom-scrollbar pb-4 mb-4">
+                            <table className="w-full text-left min-w-[600px]">
+                                <thead><tr className="text-[11px] uppercase font-black text-slate-500 border-b border-slate-800"><th className="pb-6 pl-4">Asset Matrix</th><th className="pb-6">Quantity</th><th className="pb-6">Entry Zone</th><th className="pb-6">Liq. Level</th><th className="pb-6">Delta PnL</th><th className="pb-6 pr-4 text-right">Ops</th></tr></thead>
+                                <tbody className="text-sm font-bold">
+                                {portfolio.positions.map(pos => {
+                                    const mark = priceMap[pos.symbol] || pos.entryPrice;
+                                    const diff = mark - pos.entryPrice;
+                                    const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
+                                    
+                                    const marginLocked = (pos.entryPrice * pos.amount) / pos.leverage;
+                                    const liqPrice = pos.type === 'LONG' 
+                                        ? pos.entryPrice * (1 - (1/pos.leverage) + 0.005) 
+                                        : pos.entryPrice * (1 + (1/pos.leverage) - 0.005);
+                                    
+                                    return (
+                                    <tr key={pos.id} className="border-b border-slate-800/40">
+                                        <td className="py-8 pl-4 flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${pos.type === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`} />{pos.symbol}</td>
+                                        <td className="py-8 mono text-slate-200">{pos.amount}</td>
+                                        <td className="py-8 mono text-slate-400">${pos.entryPrice.toLocaleString()}</td>
+                                        <td className="py-8 mono text-rose-400">${liqPrice > 0 ? liqPrice.toLocaleString(undefined, { maximumFractionDigits: 1 }) : 'N/A'}</td>
+                                        <td className={`py-8 mono ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                        {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                                        <span className="text-[10px] ml-1 opacity-75">
+                                            ({marginLocked > 0 ? ((pnl / marginLocked) * 100).toFixed(2) : '0.00'}%)
+                                        </span>
+                                        </td>
+                                        <td className="py-8 pr-4 text-right"><button onClick={() => handleClosePosition(pos.id)} className="px-6 py-3 bg-slate-800 hover:bg-rose-500 hover:text-white text-[10px] font-black rounded-xl transition-all uppercase tracking-widest">Close</button></td>
+                                    </tr>
+                                    );
+                                })}
+                                </tbody>
+                            </table>
+                            </div>
+                            <div className="flex justify-end pt-4 border-t border-slate-800">
+                                <button onClick={handleExitAll} className="px-8 py-4 bg-slate-800 hover:bg-rose-500/10 hover:text-rose-400 text-[10px] font-black rounded-xl border border-slate-700/50 hover:border-rose-500/50 uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 shadow-lg"><Ban className="w-4 h-4" /> Exit All Trades</button>
+                            </div>
+                            </>
+                        ) : (<div className="py-20 text-center text-slate-600 uppercase font-black text-xs tracking-[0.2em] opacity-30"><Layers className="w-16 h-16 mx-auto mb-6" /> No Active Signal Detected</div>)}
+                      </div>
+                  )}
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-12 shadow-2xl">
-                  <h3 className="font-black text-2xl mb-10 flex items-center gap-4"><div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400"><Cpu className="w-6 h-6" /></div> Neural Market Synthesis</h3>
-                  {lastAnalysis ? (
-                    <div className="flex flex-col gap-10">
-                      <div className="grid grid-cols-1 md:grid-cols-12 gap-10 items-center">
-                        <div className="md:col-span-4 p-8 bg-slate-950 border border-slate-800 rounded-[2rem] flex flex-col items-center justify-center text-center shadow-xl">
-                          <span className="text-[10px] font-black text-slate-500 mb-4 uppercase tracking-[0.2em]">{lastAnalysis.strategyUsed || 'Signal Matrix'}</span>
-                          <span className={`text-4xl font-black mb-4 ${lastAnalysis.action === 'BUY' ? 'text-emerald-400' : lastAnalysis.action === 'SELL' ? 'text-rose-400' : 'text-blue-400'}`}>{lastAnalysis.action}</span>
-                          <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden"><div className={`h-full transition-all duration-1000 ${lastAnalysis.action === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${lastAnalysis.confidence * 100}%` }} /></div>
-                          <span className="mt-3 text-[10px] font-black text-slate-500">PROBABILITY Index: {(lastAnalysis.confidence * 100).toFixed(0)}%</span>
-                        </div>
-                        <div className="md:col-span-8 p-10 bg-slate-950/40 border border-slate-800 rounded-[2rem] shadow-inner">
-                          <span className="text-[10px] font-black text-slate-500 mb-4 block uppercase tracking-widest flex items-center gap-2"><Info className="w-4 h-4" /> Engine Commentary</span>
-                          <p className="text-base text-slate-400 leading-relaxed font-medium italic border-l-2 border-slate-800 pl-8">"{lastAnalysis.reasoning}"</p>
-                        </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-12 shadow-2xl transition-all">
+                  <div 
+                    className="flex items-center justify-between cursor-pointer group mb-10"
+                    onClick={() => setIsNeuralAnalysisExpanded(!isNeuralAnalysisExpanded)}
+                  >
+                    <h3 className="font-black text-2xl flex items-center gap-4">
+                      <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400"><Cpu className="w-6 h-6" /></div> Neural Market Synthesis
+                    </h3>
+                    <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isNeuralAnalysisExpanded ? 'rotate-180' : ''}`}>
+                         <ChevronDown className="w-4 h-4" />
+                    </button>
+                  </div>
+                  
+                  {isNeuralAnalysisExpanded && (
+                      <div className="animate-slide-up">
+                        {lastAnalysis ? (
+                            <div className="flex flex-col gap-10">
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-10 items-center">
+                                <div className="md:col-span-4 p-8 bg-slate-950 border border-slate-800 rounded-[2rem] flex flex-col items-center justify-center text-center shadow-xl">
+                                <span className="text-[10px] font-black text-slate-500 mb-4 uppercase tracking-[0.2em]">{lastAnalysis.strategyUsed || 'Signal Matrix'}</span>
+                                <span className={`text-4xl font-black mb-4 ${lastAnalysis.action === 'BUY' ? 'text-emerald-400' : lastAnalysis.action === 'SELL' ? 'text-rose-400' : 'text-blue-400'}`}>{lastAnalysis.action}</span>
+                                <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden"><div className={`h-full transition-all duration-1000 ${lastAnalysis.action === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${lastAnalysis.confidence * 100}%` }} /></div>
+                                <span className="mt-3 text-[10px] font-black text-slate-500">PROBABILITY Index: {(lastAnalysis.confidence * 100).toFixed(0)}%</span>
+                                </div>
+                                <div className="md:col-span-8 p-10 bg-slate-950/40 border border-slate-800 rounded-[2rem] shadow-inner">
+                                <span className="text-[10px] font-black text-slate-500 mb-4 block uppercase tracking-widest flex items-center gap-2"><Info className="w-4 h-4" /> Engine Commentary</span>
+                                <p className="text-base text-slate-400 leading-relaxed font-medium italic border-l-2 border-slate-800 pl-8">"{lastAnalysis.reasoning}"</p>
+                                </div>
+                            </div>
+                            </div>
+                        ) : (<div className="py-20 text-center text-slate-700 font-black text-xs uppercase tracking-widest opacity-40 animate-pulse"><RefreshCcw className="w-8 h-8 mx-auto mb-4 animate-spin" /> Deep Signal Parsing...</div>)}
                       </div>
-                    </div>
-                  ) : (<div className="py-20 text-center text-slate-700 font-black text-xs uppercase tracking-widest opacity-40 animate-pulse"><RefreshCcw className="w-8 h-8 mx-auto mb-4 animate-spin" /> Deep Signal Parsing...</div>)}
+                  )}
                 </div>
               </div>
 
@@ -937,8 +977,6 @@ export default function App() {
                       <button onClick={() => executeTrade('BUY', currentPrice, "Manual Long Strategy")} className="group py-4 md:py-8 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/20 rounded-[2rem] font-black transition-all shadow-xl flex flex-col items-center gap-3 active:scale-95"><ArrowUpCircle className="w-8 h-8 md:w-12 md:h-12 group-hover:-translate-y-1 transition-transform" /><span>LONG</span></button>
                       <button onClick={() => executeTrade('SELL', currentPrice, "Manual Short Strategy")} className="group py-4 md:py-8 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-slate-950 border border-rose-500/20 rounded-[2rem] font-black transition-all shadow-xl flex flex-col items-center gap-3 active:scale-95"><ArrowDownCircle className="w-8 h-8 md:w-12 md:h-12 group-hover:translate-y-1 transition-transform" /><span>SHORT</span></button>
                     </div>
-                    
-                    <button onClick={handleExitAll} className="w-full py-5 bg-slate-800 hover:bg-slate-700 text-[11px] font-black rounded-2xl border border-slate-700 uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-3"><Ban className="w-4 h-4 text-rose-500" /> Exit All Trades</button>
                   </div>
                 </div>
 
