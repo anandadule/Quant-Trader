@@ -34,6 +34,8 @@ export interface Position {
   amount: number;
   leverage: number;
   timestamp: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
 }
 
 export interface Portfolio {

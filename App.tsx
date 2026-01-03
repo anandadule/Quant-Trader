@@ -136,6 +136,18 @@ export default function App() {
   const [financialModal, setFinancialModal] = useState<{isOpen: boolean, type: 'deposit' | 'withdraw'}>({isOpen: false, type: 'deposit'});
   const [modalAmount, setModalAmount] = useState<string>('');
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  
+  // Position Target Edit Modal State
+  const [targetModal, setTargetModal] = useState<{
+    isOpen: boolean, 
+    positionId: string, 
+    symbol: string, 
+    slPrice: string, 
+    tpPrice: string,
+    entryPrice: number,
+    leverage: number,
+    type: 'LONG' | 'SHORT'
+  } | null>(null);
 
   const marketInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const aiInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -230,6 +242,7 @@ export default function App() {
     setEquityHistory([]);
     setLastAnalysis(null);
     setResetConfirmOpen(false);
+    setTargetModal(null);
     notify("System Fully Reset", "success");
   }, [notify]);
 
@@ -248,6 +261,40 @@ export default function App() {
     setFinancialModal({ ...financialModal, isOpen: false });
     setModalAmount('');
   }, [modalAmount, financialModal, portfolio.cash, notify]);
+
+  // Helper to convert ROI % to Price based on leverage
+  const getPriceFromRoi = useCallback((roi: number, entry: number, leverage: number, type: 'LONG' | 'SHORT') => {
+    const priceChangePct = roi / leverage;
+    if (type === 'LONG') return entry * (1 + priceChangePct / 100);
+    return entry * (1 - priceChangePct / 100);
+  }, []);
+
+  // Helper to convert Price to ROI % based on leverage
+  const getRoiFromPrice = useCallback((price: number, entry: number, leverage: number, type: 'LONG' | 'SHORT') => {
+    const priceChangePct = type === 'LONG' 
+      ? ((price - entry) / entry) * 100
+      : ((entry - price) / entry) * 100;
+    // ROI = price delta % * leverage. 
+    return priceChangePct * leverage;
+  }, []);
+
+  const handleSaveTargets = useCallback(() => {
+      if (!targetModal) return;
+      
+      const tpRoi = getRoiFromPrice(parseFloat(targetModal.tpPrice), targetModal.entryPrice, targetModal.leverage, targetModal.type);
+      const slRoi = getRoiFromPrice(parseFloat(targetModal.slPrice), targetModal.entryPrice, targetModal.leverage, targetModal.type);
+      
+      setPortfolio(prev => ({
+          ...prev,
+          positions: prev.positions.map(p => 
+              p.id === targetModal.positionId 
+                  ? { ...p, stopLossPct: Math.abs(slRoi), takeProfitPct: tpRoi } 
+                  : p
+          )
+      }));
+      notify(`Updated targets for ${targetModal.symbol}`, 'success');
+      setTargetModal(null);
+  }, [targetModal, notify, getRoiFromPrice]);
   
   const handleProfileUpdate = useCallback(() => {
     setUserProfile(tempProfile);
@@ -320,7 +367,9 @@ export default function App() {
         entryPrice: price,
         amount: amount,
         leverage: leverage,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        stopLossPct: stopLossPct,
+        takeProfitPct: takeProfitPct
     };
     
     setPortfolio(prev => ({
@@ -341,7 +390,7 @@ export default function App() {
     }, ...t]);
     
     notify(`${action} Executed: ${amount} ${currentSymbol} @ $${price.toLocaleString()}`, 'success');
-  }, [lotSize, currentSymbol, selectedLeverage, portfolio.cash, notify]);
+  }, [lotSize, currentSymbol, selectedLeverage, portfolio.cash, notify, stopLossPct, takeProfitPct]);
 
   // Close Specific Position
   const handleClosePosition = useCallback((id: string) => {
@@ -396,11 +445,15 @@ export default function App() {
           const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
           const margin = (pos.entryPrice * pos.amount) / pos.leverage;
           const roi = (pnl / margin) * 100;
+          
+          // Use position-specific settings or fall back to global settings
+          const activeSL = pos.stopLossPct ?? stopLossPct;
+          const activeTP = pos.takeProfitPct ?? takeProfitPct;
 
-          if (roi <= -stopLossPct) {
+          if (roi <= -activeSL) {
               handleClosePosition(pos.id);
               notify(`Stop Loss Triggered: ${pos.symbol}`, 'error');
-          } else if (roi >= takeProfitPct) {
+          } else if (roi >= activeTP) {
               handleClosePosition(pos.id);
               notify(`Take Profit Triggered: ${pos.symbol}`, 'success');
           }
@@ -597,6 +650,114 @@ export default function App() {
                   className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black rounded-xl uppercase tracking-widest transition-all"
                 >
                   Confirm
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {targetModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] w-full max-w-md shadow-2xl animate-slide-up">
+            <h3 className="text-xl font-black mb-6 uppercase tracking-widest flex items-center gap-3">
+              <Target className="w-6 h-6 text-emerald-400" />
+              Adjust Targets: {targetModal.symbol}
+            </h3>
+            <div className="space-y-6">
+              {/* Take Profit Section */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase block">Take Profit</label>
+                    <div className="flex gap-4 text-xs font-black">
+                         {(() => {
+                            const roi = getRoiFromPrice(parseFloat(targetModal.tpPrice) || targetModal.entryPrice, targetModal.entryPrice, targetModal.leverage, targetModal.type);
+                            return <span className="text-emerald-400">{isNaN(roi) ? '0.00' : roi.toFixed(2)}% ROI</span>;
+                         })()}
+                    </div>
+                </div>
+                <div className="flex items-center gap-3">
+                    <input 
+                      type="number" 
+                      value={targetModal.tpPrice}
+                      onChange={(e) => setTargetModal({...targetModal, tpPrice: e.target.value})}
+                      className="w-24 bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs font-black text-emerald-400 outline-none focus:border-emerald-500"
+                      placeholder="Price"
+                    />
+                    <input 
+                      type="range" 
+                      min="5" 
+                      max="300" 
+                      step="5" 
+                      value={(() => {
+                           const roi = getRoiFromPrice(parseFloat(targetModal.tpPrice) || targetModal.entryPrice, targetModal.entryPrice, targetModal.leverage, targetModal.type);
+                           return isNaN(roi) ? 5 : Math.max(5, roi);
+                      })()}
+                      onChange={(e) => {
+                          const newRoi = parseFloat(e.target.value);
+                          setTargetModal({
+                              ...targetModal, 
+                              tpPrice: getPriceFromRoi(newRoi, targetModal.entryPrice, targetModal.leverage, targetModal.type).toFixed(2)
+                          });
+                      }}
+                      className="flex-1 h-2 bg-slate-800 rounded-full appearance-none accent-emerald-500 cursor-pointer"
+                    />
+                </div>
+              </div>
+
+              {/* Stop Loss Section */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase block">Stop Loss</label>
+                     <div className="flex gap-4 text-xs font-black">
+                         {(() => {
+                            const roi = getRoiFromPrice(parseFloat(targetModal.slPrice) || targetModal.entryPrice, targetModal.entryPrice, targetModal.leverage, targetModal.type);
+                            return <span className="text-rose-400">{isNaN(roi) ? '0.00' : Math.abs(roi).toFixed(2)}% ROI</span>;
+                         })()}
+                    </div>
+                </div>
+                 <div className="flex items-center gap-3">
+                    <input 
+                      type="number" 
+                      value={targetModal.slPrice}
+                      onChange={(e) => setTargetModal({...targetModal, slPrice: e.target.value})}
+                      className="w-24 bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs font-black text-rose-400 outline-none focus:border-rose-500"
+                      placeholder="Price"
+                    />
+                    <input 
+                      type="range" 
+                      min="1" 
+                      max="95" 
+                      step="1" 
+                      value={(() => {
+                           const roi = getRoiFromPrice(parseFloat(targetModal.slPrice) || targetModal.entryPrice, targetModal.entryPrice, targetModal.leverage, targetModal.type);
+                           return isNaN(roi) ? 1 : Math.abs(roi);
+                      })()}
+                      onChange={(e) => {
+                          const newRoiMag = parseFloat(e.target.value);
+                          // SL is negative ROI
+                          setTargetModal({
+                              ...targetModal, 
+                              slPrice: getPriceFromRoi(-newRoiMag, targetModal.entryPrice, targetModal.leverage, targetModal.type).toFixed(2)
+                          });
+                      }}
+                      className="flex-1 h-2 bg-slate-800 rounded-full appearance-none accent-rose-500 cursor-pointer"
+                    />
+                </div>
+              </div>
+              
+              <div className="flex gap-4 pt-4">
+                <button 
+                  onClick={() => setTargetModal(null)} 
+                  className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-[10px] font-black rounded-xl uppercase tracking-widest transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleSaveTargets} 
+                  className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black rounded-xl uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Save Targets
                 </button>
               </div>
             </div>
@@ -836,8 +997,18 @@ export default function App() {
                         {portfolio.positions.length > 0 ? (
                             <>
                             <div className="overflow-x-auto custom-scrollbar pb-4 mb-4">
-                            <table className="w-full text-left min-w-[600px]">
-                                <thead><tr className="text-[11px] uppercase font-black text-slate-500 border-b border-slate-800"><th className="pb-6 pl-4">Asset Matrix</th><th className="pb-6">Quantity</th><th className="pb-6">Entry Zone</th><th className="pb-6">Liq. Level</th><th className="pb-6">Delta PnL</th><th className="pb-6 pr-4 text-right">Ops</th></tr></thead>
+                            <table className="w-full text-left border-collapse min-w-[600px]">
+                                <thead>
+                                    <tr className="text-[10px] uppercase font-black text-slate-500 border-b border-slate-800">
+                                        <th className="pb-4 pl-4 w-[140px]">Asset Matrix</th>
+                                        <th className="pb-4 w-[100px]">Quantity</th>
+                                        <th className="pb-4 w-[120px]">Entry Price</th>
+                                        <th className="pb-4 w-[120px]">Liq. Price</th>
+                                        <th className="pb-4 w-[220px]">Targets (TP / SL)</th>
+                                        <th className="pb-4 w-[140px]">Unrealized PnL</th>
+                                        <th className="pb-4 pr-4 text-right">Manage</th>
+                                    </tr>
+                                </thead>
                                 <tbody className="text-sm font-bold">
                                 {portfolio.positions.map(pos => {
                                     const mark = priceMap[pos.symbol] || pos.entryPrice;
@@ -849,19 +1020,74 @@ export default function App() {
                                         ? pos.entryPrice * (1 - (1/pos.leverage) + 0.005) 
                                         : pos.entryPrice * (1 + (1/pos.leverage) - 0.005);
                                     
+                                    const tpPct = pos.takeProfitPct ?? takeProfitPct;
+                                    const slPct = pos.stopLossPct ?? stopLossPct;
+                                    const roi = (pnl / marginLocked) * 100;
+
                                     return (
-                                    <tr key={pos.id} className="border-b border-slate-800/40">
-                                        <td className="py-8 pl-4 flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${pos.type === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`} />{pos.symbol}</td>
-                                        <td className="py-8 mono text-slate-200">{pos.amount}</td>
-                                        <td className="py-8 mono text-slate-400">${pos.entryPrice.toLocaleString()}</td>
-                                        <td className="py-8 mono text-rose-400">${liqPrice > 0 ? liqPrice.toLocaleString(undefined, { maximumFractionDigits: 1 }) : 'N/A'}</td>
-                                        <td className={`py-8 mono ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                        {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-                                        <span className="text-[10px] ml-1 opacity-75">
-                                            ({marginLocked > 0 ? ((pnl / marginLocked) * 100).toFixed(2) : '0.00'}%)
-                                        </span>
+                                    <tr key={pos.id} className="border-b border-slate-800/40 hover:bg-slate-900/60 transition-colors">
+                                        <td className="py-5 pl-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`w-2 h-2 rounded-full ${pos.type === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'} shadow-[0_0_8px_rgba(0,0,0,0.5)]`} />
+                                                <div className="flex flex-col">
+                                                    <span className="text-slate-200 leading-none mb-1">{pos.symbol}</span>
+                                                    <span className={`text-[9px] ${pos.type === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>{pos.type} {pos.leverage}X</span>
+                                                </div>
+                                            </div>
                                         </td>
-                                        <td className="py-8 pr-4 text-right"><button onClick={() => handleClosePosition(pos.id)} className="px-6 py-3 bg-slate-800 hover:bg-rose-500 hover:text-white text-[10px] font-black rounded-xl transition-all uppercase tracking-widest">Close</button></td>
+                                        <td className="py-5 font-mono text-slate-400">{pos.amount}</td>
+                                        <td className="py-5 font-mono text-slate-300">${pos.entryPrice.toLocaleString()}</td>
+                                        <td className="py-5 font-mono text-rose-400/80">${liqPrice > 0 ? liqPrice.toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'N/A'}</td>
+                                        <td className="py-5">
+                                            <div className="flex flex-col gap-1.5 w-full max-w-[200px]">
+                                                {/* TP Row */}
+                                                <div className="flex items-center justify-between text-[10px] bg-emerald-500/5 px-2 py-1 rounded border border-emerald-500/10">
+                                                    <span className="font-black text-emerald-500">TP</span>
+                                                    <div className="flex items-center gap-2 font-mono">
+                                                        <span className="text-emerald-400 font-bold">{tpPct.toFixed(2)}%</span>
+                                                        <span className="text-slate-600">|</span>
+                                                        <span className="text-slate-400">${getPriceFromRoi(tpPct, pos.entryPrice, pos.leverage, pos.type).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                </div>
+                                                {/* SL Row */}
+                                                <div className="flex items-center justify-between text-[10px] bg-rose-500/5 px-2 py-1 rounded border border-rose-500/10">
+                                                    <span className="font-black text-rose-500">SL</span>
+                                                    <div className="flex items-center gap-2 font-mono">
+                                                        <span className="text-rose-400 font-bold">{slPct.toFixed(2)}%</span>
+                                                        <span className="text-slate-600">|</span>
+                                                        <span className="text-slate-400">${getPriceFromRoi(-slPct, pos.entryPrice, pos.leverage, pos.type).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="py-5">
+                                             <div className={`font-mono text-base ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                 {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                                             </div>
+                                             <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                                                 {roi >= 0 ? '+' : ''}{roi.toFixed(2)}%
+                                             </div>
+                                        </td>
+                                        <td className="py-5 pr-4 text-right">
+                                            <div className="flex gap-2 justify-end">
+                                                <button 
+                                                    onClick={() => setTargetModal({ 
+                                                        isOpen: true, 
+                                                        positionId: pos.id, 
+                                                        symbol: pos.symbol,
+                                                        tpPrice: getPriceFromRoi(pos.takeProfitPct ?? takeProfitPct, pos.entryPrice, pos.leverage, pos.type).toFixed(2), 
+                                                        slPrice: getPriceFromRoi(-(pos.stopLossPct ?? stopLossPct), pos.entryPrice, pos.leverage, pos.type).toFixed(2),
+                                                        entryPrice: pos.entryPrice,
+                                                        leverage: pos.leverage,
+                                                        type: pos.type
+                                                    })}
+                                                    className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition-all border border-slate-700/50"
+                                                >
+                                                    <Edit3 className="w-3.5 h-3.5" />
+                                                </button>
+                                                <button onClick={() => handleClosePosition(pos.id)} className="h-8 px-4 bg-slate-800 hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/50 text-slate-400 text-[10px] font-black rounded-lg transition-all uppercase tracking-wider border border-slate-700/50">Close</button>
+                                            </div>
+                                        </td>
                                     </tr>
                                     );
                                 })}
