@@ -26,12 +26,23 @@ export interface Trade {
   symbol?: string;
 }
 
+export interface Position {
+  id: string;
+  symbol: string;
+  type: 'LONG' | 'SHORT';
+  entryPrice: number;
+  amount: number;
+  leverage: number;
+  timestamp: number;
+}
+
 export interface Portfolio {
   cash: number;
   assets: number;
   initialValue: number;
   avgEntryPrice: number; 
   positionSymbol?: string;
+  positions: Position[];
 }
 
 export interface EquityPoint {
