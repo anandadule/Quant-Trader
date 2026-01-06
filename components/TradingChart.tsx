@@ -126,6 +126,13 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     }
 
     if (window.TradingView) {
+      const disabledFeatures = [
+        'header_symbol_search',
+        'header_compare',
+        'header_screenshot',
+        'header_saveload'
+      ];
+
       new window.TradingView.widget({
         autosize: true,
         symbol: getFullSymbol(currentSymbol),
@@ -142,12 +149,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         backgroundColor: '#0f172a',
         gridColor: 'rgba(30, 41, 59, 0.1)',
         studies: getStudies(),
-        disabled_features: [
-          'header_symbol_search',
-          'header_compare',
-          'header_screenshot',
-          'header_saveload'
-        ],
+        disabled_features: disabledFeatures,
       });
     }
   }, [currentSymbol, timeframe, showToolbar, activeStrategy]);
@@ -155,9 +157,9 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   return (
     <div 
       ref={wrapperRef} 
-      className={`w-full h-full flex flex-col gap-3 transition-all duration-300 ${isFullscreen ? 'p-6 bg-slate-950 flex flex-col' : ''}`}
+      className={`w-full h-full flex flex-col gap-3 transition-all duration-300 ${isFullscreen ? 'p-1 bg-slate-950 flex flex-col' : ''}`}
     >
-      <div className="flex flex-wrap justify-between items-center gap-2 bg-slate-900/60 p-2 sm:p-3 rounded-xl border border-slate-800/50 relative z-10">
+      <div className={`flex flex-wrap justify-between items-center gap-2 bg-slate-900/60 p-2 sm:p-3 rounded-xl border border-slate-800/50 relative z-10`}>
         <div className="flex items-center gap-2 shrink-0">
             <div className="relative shrink-0">
                 <button 

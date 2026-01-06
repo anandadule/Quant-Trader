@@ -1,24 +1,30 @@
-
 import { PriceData } from '../types';
 
 let currentTrend = 0;
 let volatility = 0.002;
 
+// Configuration for Backend Access
+// In a Vercel/Serverless environment, we simply use relative paths '/api/...'
+// The vercel.json rewrites handle directing these to the api/ folder.
+const getApiBaseUrl = () => {
+  // If we are running strictly locally with 'npm run server', we might point to 3001.
+  // However, Vite proxy is set up to forward /api to 3001 in dev.
+  // In production, /api is handled by Vercel serverless functions.
+  return '/api';
+};
+
+const API_BASE_URL = getApiBaseUrl();
+
 const SEED_PRICES: Record<string, number> = {
   'BTCUSDT': 98200.50,
   'ETHUSDT': 2750.00,
   'SOLUSDT': 185.00,
-  'BNBUSDT': 650.00,
-  'XRPUSDT': 2.45,
-  'DOGEUSDT': 0.35,
-  'ADAUSDT': 1.10,
-  'NIFTY': 24350.25,
-  'NSE:NIFTY': 24350.25,
-  'BANKNIFTY': 52420.80,
-  'NSE:BANKNIFTY': 52420.80
+  'NSE:NIFTY50-INDEX': 24350.25,
+  'NSE:NIFTYBANK-INDEX': 52420.80,
+  'NSE:RELIANCE-EQ': 2850.50,
+  'NSE:HDFCBANK-EQ': 1650.10,
+  'NSE:SBIN-EQ': 750.25
 };
-
-const isCrypto = (symbol: string) => symbol.endsWith('USDT') || symbol.includes('BTC') || symbol.includes('ETH');
 
 // Fallback for unknown symbols to ensure the UI never breaks
 const getSeedPrice = (symbol: string): number => {
@@ -99,6 +105,50 @@ export const generateInitialData = (count: number = 200, symbol: string = 'BTCUS
 };
 
 export const fetchHistoricalData = async (symbol: string, interval: string = '1m', limit: number = 200): Promise<PriceData[]> => {
+  // --- FYERS INTEGRATION (Via Backend Proxy) ---
+  if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
+    try {
+      const resolutionMap: Record<string, string> = { '1m': '1', '5m': '5', '1h': '60', '1d': 'D' };
+      const resVal = resolutionMap[interval] || '1';
+      
+      const toDate = Math.floor(Date.now() / 1000);
+      const fromDate = toDate - (limit * 60 * 60 * 24); 
+      
+      const rangeFrom = new Date(fromDate * 1000).toISOString().split('T')[0];
+      const rangeTo = new Date(toDate * 1000).toISOString().split('T')[0];
+      
+      // Points to /api/history which Vercel routes to api/history.js
+      const url = `${API_BASE_URL}/history?symbol=${symbol}&resolution=${resVal}&date_format=1&range_from=${rangeFrom}&range_to=${rangeTo}&cont_flag=1`;
+      
+      const res = await fetch(url);
+      
+      if (res.ok) {
+          const json = await res.json();
+          if (json.s === 'ok' && json.candles) {
+            const data = json.candles.map((c: any) => ({
+              time: formatTime(new Date(c[0] * 1000)),
+              timestamp: c[0],
+              open: c[1],
+              high: c[2],
+              low: c[3],
+              price: c[4],
+              volume: c[5]
+            }));
+            return calculateIndicators(data);
+          } else if (json.error) {
+             console.warn(`Backend API Error: ${json.message}`);
+          }
+      } else {
+        console.warn("Backend reachable but returned error.");
+      }
+    } catch (e) {
+      console.warn("Backend API failed, falling back to simulation.");
+    }
+    // Fallback if backend is not running or keys invalid
+    return generateInitialData(limit, symbol, interval);
+  }
+
+  // --- BINANCE INTEGRATION ---
   if (!symbol.endsWith('USDT')) {
     return generateInitialData(limit, symbol, interval);
   }
@@ -120,21 +170,68 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
 };
 
 export const fetchLatestQuote = async (symbol: string, interval: string = '1m', prevData?: PriceData[]): Promise<PriceData | null> => {
+  // --- FYERS INTEGRATION (Via Backend Proxy) ---
+  if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
+      try {
+        const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
+        const res = await fetch(url);
+        if (res.ok) {
+            const json = await res.json();
+            if (json.d && json.d[0]) {
+                const d = json.d[0].v;
+                const price = d.lp;
+                const now = new Date();
+                return {
+                    time: formatTime(now),
+                    timestamp: now.getTime() / 1000,
+                    price: price,
+                    open: price, // Approximation for single tick
+                    high: price,
+                    low: price,
+                    volume: d.volume
+                }
+            }
+        }
+      } catch (e) { 
+        // Backend likely offline, ignore
+      }
+      
+      // Fallback Simulation
+      if (prevData && prevData.length > 0) {
+        const last = prevData[prevData.length - 1];
+        const change = (Math.random() - 0.5) * volatility;
+        const close = last.price * (1 + change);
+        const now = new Date();
+        return {
+          time: formatTime(now),
+          timestamp: now.getTime() / 1000,
+          price: close,
+          open: last.price,
+          high: Math.max(last.price, close) * 1.0005,
+          low: Math.min(last.price, close) * 0.9995,
+          volume: Math.random() * 5
+        };
+      }
+      return null;
+  }
+
+  // --- BINANCE INTEGRATION ---
   if (!symbol.endsWith('USDT')) {
+    // Other sim fallback
     if (prevData && prevData.length > 0) {
-      const last = prevData[prevData.length - 1];
-      const change = (Math.random() - 0.5) * volatility;
-      const close = last.price * (1 + change);
-      const now = new Date();
-      return {
-        time: formatTime(now),
-        timestamp: now.getTime() / 1000,
-        price: close,
-        open: last.price,
-        high: Math.max(last.price, close) * 1.0005,
-        low: Math.min(last.price, close) * 0.9995,
-        volume: Math.random() * 5
-      };
+        const last = prevData[prevData.length - 1];
+        const change = (Math.random() - 0.5) * volatility;
+        const close = last.price * (1 + change);
+        const now = new Date();
+        return {
+            time: formatTime(now),
+            timestamp: now.getTime() / 1000,
+            price: close,
+            open: last.price,
+            high: Math.max(last.price, close) * 1.0005,
+            low: Math.min(last.price, close) * 0.9995,
+            volume: Math.random() * 5
+        };
     }
     return null;
   }
@@ -153,6 +250,31 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
 };
 
 export const fetchTicker = async (symbol: string): Promise<{ price: number; changePercent: number } | null> => {
+  // --- FYERS INTEGRATION (Via Backend Proxy) ---
+  if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
+     try {
+         const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
+         const res = await fetch(url);
+         if (res.ok) {
+             const json = await res.json();
+             if (json.d && json.d[0]) {
+                 const d = json.d[0].v;
+                 return {
+                     price: d.lp,
+                     changePercent: d.chp
+                 };
+             }
+         }
+     } catch (e) {}
+     
+     // Fallback
+     const base = getSeedPrice(symbol);
+     return {
+        price: base * (1 + (Math.random() - 0.5) * 0.001),
+        changePercent: (Math.random() - 0.5) * 2
+     };
+  }
+
   if (!symbol.endsWith('USDT')) {
     const base = getSeedPrice(symbol);
     return {
