@@ -1029,12 +1029,11 @@ export default function App() {
                             <table className="w-full text-left border-collapse min-w-[600px]">
                                 <thead>
                                     <tr className="text-[10px] uppercase font-black text-slate-500 border-b border-slate-800">
-                                        <th className="pb-4 pl-4 w-[140px]">Asset Matrix</th>
-                                        <th className="pb-4 w-[100px]">Quantity</th>
-                                        <th className="pb-4 w-[120px]">Entry Price</th>
-                                        <th className="pb-4 w-[120px]">Liq. Price</th>
-                                        <th className="pb-4 w-[220px]">Targets (TP / SL)</th>
-                                        <th className="pb-4 w-[140px]">Unrealized PnL</th>
+                                        <th className="pb-4 pl-4 w-[200px]">Asset Matrix</th>
+                                        <th className="pb-4 w-[120px]">Quantity</th>
+                                        <th className="pb-4 w-[200px]">Entry / Liq</th>
+                                        <th className="pb-4 w-[260px]">Targets (TP / SL)</th>
+                                        <th className="pb-4 w-[180px]">Unrealized PnL</th>
                                         <th className="pb-4 pr-4 text-right">Manage</th>
                                     </tr>
                                 </thead>
@@ -1065,8 +1064,12 @@ export default function App() {
                                             </div>
                                         </td>
                                         <td className="py-5 font-mono text-slate-400">{pos.amount}</td>
-                                        <td className="py-5 font-mono text-slate-300">${pos.entryPrice.toLocaleString()}</td>
-                                        <td className="py-5 font-mono text-rose-400/80">${liqPrice > 0 ? liqPrice.toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'N/A'}</td>
+                                        <td className="py-5 align-top">
+                                            <div className="flex flex-col">
+                                                <span className="font-mono text-slate-300 font-bold">${pos.entryPrice.toLocaleString()}</span>
+                                                <span className="font-mono text-rose-400/80 text-[10px] mt-1">Liq: ${liqPrice > 0 ? liqPrice.toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'N/A'}</span>
+                                            </div>
+                                        </td>
                                         <td className="py-5">
                                             <div className="flex flex-col gap-1.5 w-full max-w-[200px]">
                                                 {/* TP Row */}

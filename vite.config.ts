@@ -7,11 +7,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // This ensures the Google GenAI SDK can access process.env.API_KEY in the browser
+      // We only expose API_KEY to the browser.
+      // FYERS keys are now secure and only accessible by the /api serverless functions.
       'process.env': {
-        API_KEY: env.API_KEY,
-        FYERS_APP_ID: env.FYERS_APP_ID,
-        FYERS_ACCESS_TOKEN: env.FYERS_ACCESS_TOKEN
+        API_KEY: env.API_KEY
       }
     },
     server: {
