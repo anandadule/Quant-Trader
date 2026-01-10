@@ -8,11 +8,12 @@
  * 4. Run: node server.js
  */
 
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
-const path = require('path');
-require('dotenv').config();
+import express from 'express';
+import cors from 'cors';
+import axios from 'axios';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
 const PORT = 3001;

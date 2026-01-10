@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   TrendingUp, 
@@ -45,10 +46,12 @@ import {
   Pause,
   Trash2,
   Wifi,
-  WifiOff
+  WifiOff,
+  Cloud
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradingChart } from './components/TradingChart';
+import { Auth } from './components/Auth';
 import { PriceData, Trade, Portfolio, TradingMode, AIAnalysis, EquityPoint, WatchlistItem, Strategy, Position } from './types';
 import { 
   fetchHistoricalData, 
@@ -57,15 +60,21 @@ import {
   mergeQuote 
 } from './services/marketSim';
 import { analyzeMarket } from './services/geminiService';
+import { supabase } from './services/supabaseClient';
+import { db } from './services/db';
 
 const INITIAL_CASH = 10000;
 const STORAGE_KEY = 'gemini_quant_pro_v12_multi_pos';
-const MAINTENANCE_MARGIN_PCT = 0.05;
 
 const AVAILABLE_PAIRS = [
   { symbol: 'BTCUSDT', name: 'BTC/USD' },
   { symbol: 'ETHUSDT', name: 'ETH/USD' },
   { symbol: 'SOLUSDT', name: 'SOL/USD' },
+  { symbol: 'XAUUSDT', name: 'Gold/USD' },
+  { symbol: 'DOGEUSDT', name: 'DOGE/USD' },
+  { symbol: 'XRPUSDT', name: 'XRP/USD' },
+  { symbol: 'ADAUSDT', name: 'ADA/USD' },
+  { symbol: 'BNBUSDT', name: 'BNB/USD' },
   { symbol: 'NSE:NIFTY50-INDEX', name: 'Nifty 50' },
   { symbol: 'NSE:NIFTYBANK-INDEX', name: 'Bank Nifty' },
   { symbol: 'NSE:RELIANCE-EQ', name: 'Reliance Ind' },
@@ -89,6 +98,8 @@ const getSavedItem = (key: string, defaultValue: any) => {
 };
 
 export default function App() {
+  const [session, setSession] = useState<any>(null);
+  
   const [portfolio, setPortfolio] = useState<Portfolio>(() => 
     getSavedItem('portfolio', { cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH })
   );
@@ -106,7 +117,6 @@ export default function App() {
   const [lastAnalysis, setLastAnalysis] = useState<AIAnalysis | null>(null);
   const [notifications, setNotifications] = useState<{msg: string, type: 'info' | 'success' | 'error'}[]>([]);
   const [isLive, setIsLive] = useState(false);
-  const [isSimulatedData, setIsSimulatedData] = useState(false);
   const [timeframe, setTimeframe] = useState<string>('5m');
   const [currentSymbol, setCurrentSymbol] = useState<string>(() => getSavedItem('currentSymbol', 'BTCUSDT'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -158,6 +168,59 @@ export default function App() {
   const notify = useCallback((msg: string, type: 'info' | 'success' | 'error' = 'info') => {
     setNotifications(prev => [{ msg, type }, ...prev].slice(0, 5));
   }, []);
+
+  // Sync with DB on Login
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session?.user) {
+        setUserProfile(prev => ({ ...prev, email: session.user.email || prev.email }));
+        // Load data from DB
+        loadUserData(session.user.id);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session?.user) {
+        setUserProfile(prev => ({ ...prev, email: session.user.email || prev.email }));
+        loadUserData(session.user.id);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const loadUserData = async (userId: string) => {
+    try {
+        const [dbPortfolio, dbTrades] = await Promise.all([
+            db.getPortfolio(userId),
+            db.getTrades(userId)
+        ]);
+
+        if (dbPortfolio) {
+            setPortfolio(dbPortfolio);
+            notify("Portfolio synced from cloud", "success");
+        } else {
+            // First time setup in DB
+            await db.upsertPortfolio(userId, portfolio);
+        }
+
+        if (dbTrades.length > 0) {
+            setTrades(dbTrades);
+        }
+    } catch (e) {
+        console.error("Failed to load user data", e);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    // Optional: Clear local state on logout
+    // setPortfolio({ ... });
+  };
+
 
   // Symbol Change Handler
   const handleSymbolChange = useCallback((symbol: string) => {
@@ -238,32 +301,44 @@ export default function App() {
     setHistoryPage(1);
   }, [historyFilterType, historyFilterPnL, historyFilterStartDate, historyFilterEndDate]);
 
-  const handleResetSystem = useCallback(() => {
+  const handleResetSystem = useCallback(async () => {
     localStorage.removeItem(STORAGE_KEY);
-    setPortfolio({ cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH, assets: 0, avgEntryPrice: 0 });
+    const emptyPortfolio = { cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH, assets: 0, avgEntryPrice: 0 };
+    setPortfolio(emptyPortfolio);
     setTrades([]);
     setEquityHistory([]);
     setLastAnalysis(null);
     setResetConfirmOpen(false);
     setTargetModal(null);
     notify("System Fully Reset", "success");
-  }, [notify]);
 
-  const handleFinancialAction = useCallback(() => {
+    if (session?.user) {
+        await db.upsertPortfolio(session.user.id, emptyPortfolio);
+        // We probably should implement a deleteTrades function if we want a true DB wipe
+    }
+  }, [notify, session]);
+
+  const handleFinancialAction = useCallback(async () => {
     const val = parseFloat(modalAmount);
     if (isNaN(val) || val <= 0) { notify("Invalid amount", "error"); return; }
     if (financialModal.type === 'withdraw' && val > portfolio.cash) { notify("Insufficient cash", "error"); return; }
 
-    setPortfolio(prev => ({
-      ...prev,
-      cash: financialModal.type === 'deposit' ? prev.cash + val : prev.cash - val,
-      initialValue: financialModal.type === 'deposit' ? prev.initialValue + val : prev.initialValue - val
-    }));
+    const newPortfolio = {
+      ...portfolio,
+      cash: financialModal.type === 'deposit' ? portfolio.cash + val : portfolio.cash - val,
+      initialValue: financialModal.type === 'deposit' ? portfolio.initialValue + val : portfolio.initialValue - val
+    };
+
+    setPortfolio(newPortfolio);
     
+    if (session?.user) {
+        await db.upsertPortfolio(session.user.id, newPortfolio);
+    }
+
     notify(`${financialModal.type === 'deposit' ? 'Deposited' : 'Withdrew'} $${val.toLocaleString()}`, "success");
     setFinancialModal({ ...financialModal, isOpen: false });
     setModalAmount('');
-  }, [modalAmount, financialModal, portfolio.cash, notify]);
+  }, [modalAmount, financialModal, portfolio, notify, session]);
 
   // Helper to convert ROI % to Price based on leverage
   const getPriceFromRoi = useCallback((roi: number, entry: number, leverage: number, type: 'LONG' | 'SHORT') => {
@@ -281,23 +356,30 @@ export default function App() {
     return priceChangePct * leverage;
   }, []);
 
-  const handleSaveTargets = useCallback(() => {
+  const handleSaveTargets = useCallback(async () => {
       if (!targetModal) return;
       
       const tpRoi = getRoiFromPrice(parseFloat(targetModal.tpPrice), targetModal.entryPrice, targetModal.leverage, targetModal.type);
       const slRoi = getRoiFromPrice(parseFloat(targetModal.slPrice), targetModal.entryPrice, targetModal.leverage, targetModal.type);
       
-      setPortfolio(prev => ({
-          ...prev,
-          positions: prev.positions.map(p => 
+      const newPortfolio = {
+          ...portfolio,
+          positions: portfolio.positions.map(p => 
               p.id === targetModal.positionId 
                   ? { ...p, stopLossPct: Math.abs(slRoi), takeProfitPct: tpRoi } 
                   : p
           )
-      }));
+      };
+
+      setPortfolio(newPortfolio);
+      
+      if (session?.user) {
+          await db.upsertPortfolio(session.user.id, newPortfolio);
+      }
+
       notify(`Updated targets for ${targetModal.symbol}`, 'success');
       setTargetModal(null);
-  }, [targetModal, notify, getRoiFromPrice]);
+  }, [targetModal, notify, getRoiFromPrice, portfolio, session]);
   
   const handleProfileUpdate = useCallback(() => {
     setUserProfile(tempProfile);
@@ -334,17 +416,13 @@ export default function App() {
   
   // Data Fetching for Chart
   useEffect(() => {
+      if (!session) return; // Only fetch detailed chart data if logged in
+      
       const initData = async () => {
           setIsLive(false);
           const data = await fetchHistoricalData(currentSymbol, timeframe);
           setMarketData(data);
-          // Heuristic to check if we are on sim data or real data
-          // If the last price matches the seed price exactly or is perfectly clean, it might be sim.
-          // But a better way is to check the backend response, but here we just infer:
           setIsLive(true);
-          
-          // Check if it looks like simulated data (no 'timestamp' gap logic here, just simple flag)
-          // Ideally fetchHistoricalData would return { data, source: 'API' | 'SIM' }
       };
       initData();
       
@@ -358,10 +436,10 @@ export default function App() {
       }, 2000);
       
       return () => { if (marketInterval.current) clearInterval(marketInterval.current); };
-  }, [currentSymbol, timeframe]);
+  }, [currentSymbol, timeframe, session]);
 
   // Execute Trade: Supports multiple positions
-  const executeTrade = useCallback((action: 'BUY' | 'SELL', price: number, reasoning: string) => {
+  const executeTrade = useCallback(async (action: 'BUY' | 'SELL', price: number, reasoning: string) => {
     const amount = parseFloat(lotSize);
     if (isNaN(amount) || amount < 0.01) { notify("Minimum lot size is 0.01", "error"); return; }
     
@@ -382,13 +460,13 @@ export default function App() {
         takeProfitPct: takeProfitPct
     };
     
-    setPortfolio(prev => ({
-        ...prev,
-        cash: prev.cash - marginReq,
-        positions: [newPosition, ...prev.positions]
-    }));
+    const newPortfolio = {
+        ...portfolio,
+        cash: portfolio.cash - marginReq,
+        positions: [newPosition, ...portfolio.positions]
+    };
 
-    setTrades(t => [{
+    const newTrade: Trade = {
         id: newPosition.id,
         type: action,
         price,
@@ -397,43 +475,57 @@ export default function App() {
         timestamp: new Date(),
         reasoning,
         symbol: currentSymbol
-    }, ...t]);
+    };
+
+    setPortfolio(newPortfolio);
+    setTrades(t => [newTrade, ...t]);
+    
+    if (session?.user) {
+        await db.upsertPortfolio(session.user.id, newPortfolio);
+        await db.logTrade(session.user.id, newTrade);
+    }
     
     notify(`${action} Executed: ${amount} ${currentSymbol} @ $${price.toLocaleString()}`, 'success');
-  }, [lotSize, currentSymbol, selectedLeverage, portfolio.cash, notify, stopLossPct, takeProfitPct]);
+  }, [lotSize, currentSymbol, selectedLeverage, portfolio, notify, stopLossPct, takeProfitPct, session]);
 
   // Close Specific Position
-  const handleClosePosition = useCallback((id: string) => {
-    setPortfolio(prev => {
-        const pos = prev.positions.find(p => p.id === id);
-        if (!pos) return prev;
+  const handleClosePosition = useCallback(async (id: string) => {
+    const pos = portfolio.positions.find(p => p.id === id);
+    if (!pos) return;
 
-        const closePrice = priceMap[pos.symbol] || pos.entryPrice;
-        const diff = closePrice - pos.entryPrice;
-        const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
-        const marginReleased = (pos.entryPrice * pos.amount) / pos.leverage;
+    const closePrice = priceMap[pos.symbol] || pos.entryPrice;
+    const diff = closePrice - pos.entryPrice;
+    const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
+    const marginReleased = (pos.entryPrice * pos.amount) / pos.leverage;
 
-        setTrades(t => [{
-            id: Math.random().toString(36).substr(2, 9),
-            type: pos.type === 'LONG' ? 'SELL' : 'BUY',
-            price: closePrice,
-            amount: pos.amount,
-            leverage: pos.leverage,
-            timestamp: new Date(),
-            reasoning: `Manual Close ${pos.symbol}`,
-            pnl: pnl,
-            symbol: pos.symbol
-        }, ...t]);
+    const closingTrade: Trade = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: pos.type === 'LONG' ? 'SELL' : 'BUY',
+        price: closePrice,
+        amount: pos.amount,
+        leverage: pos.leverage,
+        timestamp: new Date(),
+        reasoning: `Manual Close ${pos.symbol}`,
+        pnl: pnl,
+        symbol: pos.symbol
+    };
 
-        notify(`Closed ${pos.symbol}. PnL: $${pnl.toFixed(2)}`, pnl >= 0 ? 'success' : 'info');
+    const newPortfolio = {
+        ...portfolio,
+        cash: portfolio.cash + marginReleased + pnl,
+        positions: portfolio.positions.filter(p => p.id !== id)
+    };
 
-        return {
-            ...prev,
-            cash: prev.cash + marginReleased + pnl,
-            positions: prev.positions.filter(p => p.id !== id)
-        };
-    });
-  }, [priceMap, notify]);
+    setTrades(t => [closingTrade, ...t]);
+    setPortfolio(newPortfolio);
+
+    if (session?.user) {
+        await db.upsertPortfolio(session.user.id, newPortfolio);
+        await db.logTrade(session.user.id, closingTrade);
+    }
+
+    notify(`Closed ${pos.symbol}. PnL: $${pnl.toFixed(2)}`, pnl >= 0 ? 'success' : 'info');
+  }, [priceMap, notify, portfolio, session]);
 
   // Close All Positions
   const handleExitAll = useCallback(() => {
@@ -477,20 +569,24 @@ export default function App() {
         const res = await analyzeMarket(marketData, currentSymbol);
         setLastAnalysis({ ...res, strategyUsed: 'AI Analysis' });
         
+        if (session?.user) {
+            await db.logAnalysis(session.user.id, res, currentSymbol);
+        }
+
         // Autopilot logic here simply executes based on the signal
         if (mode === TradingMode.AUTO && res.action !== 'HOLD') {
              executeTrade(res.action as 'BUY' | 'SELL', currentPrice, res.reasoning);
         }
     } finally { setIsAnalyzing(false); }
-  }, [marketData, mode, isAnalyzing, executeTrade, currentSymbol, currentPrice]);
+  }, [marketData, mode, isAnalyzing, executeTrade, currentSymbol, currentPrice, session]);
 
   useEffect(() => {
-    if (mode === TradingMode.AUTO) {
+    if (mode === TradingMode.AUTO && session) {
       const intervalMs = activeStrategy === Strategy.AI_GEMINI ? 30000 : 5000;
       aiInterval.current = setInterval(runAutopilotEngine, intervalMs);
     }
     return () => { if (aiInterval.current) clearInterval(aiInterval.current); };
-  }, [mode, runAutopilotEngine, activeStrategy]);
+  }, [mode, runAutopilotEngine, activeStrategy, session]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ 
@@ -529,7 +625,6 @@ export default function App() {
     }
   };
 
-  // ... (renderSettings function remains the same as before)
   const renderSettings = () => (
     <div className="max-w-4xl mx-auto animate-slide-up pb-12">
       <div className="flex items-center gap-4 mb-8">
@@ -620,7 +715,10 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <button className="w-full mt-6 py-4 bg-rose-500/10 hover:bg-rose-500 border border-rose-500/20 hover:border-rose-500 rounded-xl text-xs font-black text-rose-400 hover:text-white uppercase tracking-widest transition-all flex items-center justify-center gap-2">
+            <button 
+              onClick={handleSignOut}
+              className="w-full mt-6 py-4 bg-rose-500/10 hover:bg-rose-500 border border-rose-500/20 hover:border-rose-500 rounded-xl text-xs font-black text-rose-400 hover:text-white uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+            >
               <LogOut className="w-4 h-4" /> Sign Out
             </button>
           </div>
@@ -628,6 +726,53 @@ export default function App() {
       </div>
     </div>
   );
+
+  // LANDING PAGE RENDER
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col md:flex-row overflow-hidden font-sans text-slate-100">
+         {/* Left Side: Market Watchlist */}
+         <div className="flex-1 md:max-w-md lg:max-w-lg border-r border-slate-800 bg-slate-900/50 flex flex-col h-screen">
+             <div className="p-8 border-b border-slate-800">
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-emerald-500 rounded-2xl shadow-lg shadow-emerald-500/20"><TrendingUp className="w-8 h-8 text-slate-950" /></div>
+                    <div><h1 className="text-2xl font-black tracking-tighter">Gemini<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Public Data Feed</span></div>
+                </div>
+             </div>
+             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Live Market Matrix</span>
+                <div className="space-y-3">
+                    {watchlist.map(item => (
+                        <div key={item.symbol} className="w-full p-4 rounded-2xl border border-slate-800 bg-slate-900/40 hover:bg-slate-800/60 hover:border-emerald-500/30 transition-all group">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-black text-slate-300 group-hover:text-emerald-400 transition-colors">{item.name}</span>
+                            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${item.change24h >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>{item.change24h >= 0 ? '+' : ''}{item.change24h.toFixed(2)}%</span>
+                        </div>
+                        <div className="text-xl font-black mono text-slate-100 group-hover:tracking-wider transition-all">${item.price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                        </div>
+                    ))}
+                </div>
+             </div>
+             <div className="p-6 border-t border-slate-800 bg-slate-900/80">
+                 <div className="text-[10px] font-bold text-slate-500 text-center leading-relaxed">
+                     Real-time market data simulation powered by Gemini AI engine. <br/> Sign in to access trading terminals.
+                 </div>
+             </div>
+         </div>
+
+         {/* Right Side: Auth Form */}
+         <div className="flex-1 relative flex items-center justify-center p-8 bg-slate-950">
+             {/* Background Effects */}
+             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-emerald-500/5 rounded-full blur-[100px] pointer-events-none"></div>
+             <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-[100px] pointer-events-none"></div>
+             
+             <div className="relative z-10 w-full max-w-md">
+                 <Auth />
+             </div>
+         </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row overflow-x-hidden font-sans">
@@ -939,6 +1084,10 @@ export default function App() {
                    <div className="inline-flex items-center gap-3 text-[10px] font-black px-4 py-2 rounded-xl border border-slate-800/50 text-slate-400 bg-slate-900/50">
                         <Activity className="w-3 h-3" />
                         <span>EXECUTION: PAPER/SIM</span>
+                   </div>
+                   <div className="inline-flex items-center gap-3 text-[10px] font-black px-4 py-2 rounded-xl border border-blue-500/20 text-blue-400 bg-blue-500/5">
+                        <Cloud className="w-3 h-3" />
+                        <span>CLOUD SYNC: ACTIVE</span>
                    </div>
                 </div>
               </div>
@@ -1382,38 +1531,40 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 h-[300px] md:h-[400px] relative overflow-hidden shadow-2xl mb-12">
-              <h3 className="text-[10px] font-black text-slate-500 uppercase mb-6 flex items-center gap-3"><Activity className="w-4 h-4" /> Global Performance Graph</h3>
-              <div className="w-full h-full pb-8">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={equityHistory} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                    <defs><linearGradient id="eqG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient></defs>
-                    <Area type="monotone" dataKey="equity" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#eqG)" isAnimationActive={false} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '10px', color: '#f8fafc' }} 
-                      labelFormatter={(val) => new Date(val).toLocaleString()}
-                      formatter={(val: number) => [`$${val.toFixed(2)}`, 'Equity']}
-                    />
-                    <XAxis 
-                      dataKey="timestamp" 
-                      tickFormatter={(val) => new Date(val).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                      stroke="#334155"
-                      tick={{ fill: '#64748b', fontSize: 10 }}
-                      tickLine={false}
-                      axisLine={false}
-                      minTickGap={50}
-                    />
-                    <YAxis 
-                      domain={['auto', 'auto']}
-                      stroke="#334155"
-                      tick={{ fill: '#64748b', fontSize: 10 }}
-                      tickFormatter={(val) => `$${val}`}
-                      tickLine={false}
-                      axisLine={false}
-                      width={60}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 h-[300px] md:h-[400px] relative overflow-hidden shadow-2xl mb-12 flex flex-col">
+              <h3 className="text-[10px] font-black text-slate-500 uppercase mb-6 flex items-center gap-3 shrink-0"><Activity className="w-4 h-4" /> Global Performance Graph</h3>
+              <div className="w-full flex-1 min-h-0 relative">
+                <div className="absolute inset-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={equityHistory} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
+                      <defs><linearGradient id="eqG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient></defs>
+                      <Area type="monotone" dataKey="equity" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#eqG)" isAnimationActive={false} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '10px', color: '#f8fafc' }} 
+                        labelFormatter={(val) => new Date(val).toLocaleString()}
+                        formatter={(val: number) => [`$${val.toFixed(2)}`, 'Equity']}
+                      />
+                      <XAxis 
+                        dataKey="timestamp" 
+                        tickFormatter={(val) => new Date(val).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        stroke="#334155"
+                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={50}
+                      />
+                      <YAxis 
+                        domain={['auto', 'auto']}
+                        stroke="#334155"
+                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        tickFormatter={(val) => `$${val}`}
+                        tickLine={false}
+                        axisLine={false}
+                        width={60}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </div>
           </>

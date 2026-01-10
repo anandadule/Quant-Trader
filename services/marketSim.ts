@@ -108,11 +108,22 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
   // --- FYERS INTEGRATION (Via Backend Proxy) ---
   if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
     try {
-      const resolutionMap: Record<string, string> = { '1m': '1', '5m': '5', '1h': '60', '1d': 'D' };
+      const resolutionMap: Record<string, string> = { '1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240', '1d': 'D' };
+      const intervalSeconds: Record<string, number> = {
+        '1m': 60,
+        '5m': 300,
+        '15m': 900,
+        '1h': 3600,
+        '4h': 14400,
+        '1d': 86400
+      };
+      
       const resVal = resolutionMap[interval] || '1';
+      const secondsPerCandle = intervalSeconds[interval] || 60;
       
       const toDate = Math.floor(Date.now() / 1000);
-      const fromDate = toDate - (limit * 60 * 60 * 24); 
+      // Calculate fromDate based on number of candles (limit) * seconds per candle
+      const fromDate = toDate - (limit * secondsPerCandle); 
       
       const rangeFrom = new Date(fromDate * 1000).toISOString().split('T')[0];
       const rangeTo = new Date(toDate * 1000).toISOString().split('T')[0];
