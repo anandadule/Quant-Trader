@@ -3,27 +3,10 @@ export const DatabaseSchema = `
 -- Database Schema for AI Quant Trader
 -- Optimized for Supabase / PostgreSQL with RLS
 
--- ------------------------------------------------------------------
--- IMPORTANT: FIX FOR "MISSING UNIQUE CONSTRAINT" (Error 42P10)
--- Run the following SQL block in the Supabase SQL Editor to fix existing data:
-/*
-  -- 1. Remove duplicate portfolios, keeping only the most recently updated one
-  DELETE FROM portfolios a USING portfolios b
-  WHERE a.user_id = b.user_id AND a.updated_at < b.updated_at;
-
-  -- 2. Add the unique constraint to prevent future duplicates and enable native UPSERT
-  ALTER TABLE portfolios ADD CONSTRAINT portfolios_user_id_key UNIQUE (user_id);
-
-  -- 3. Add full_name to profiles if it doesn't exist
-  ALTER TABLE profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
-*/
--- ------------------------------------------------------------------
-
--- Enable UUID extension
+-- 1. EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 1. PROFILES
--- Automatically created when a user signs up via the trigger below.
+-- 2. PROFILES TABLE
 CREATE TABLE IF NOT EXISTS profiles (
     id UUID REFERENCES auth.users NOT NULL PRIMARY KEY,
     email TEXT,
@@ -33,13 +16,17 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
+-- Drop existing policies to prevent errors on re-run
+DROP POLICY IF EXISTS "Users can view own profile" ON profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
+
 CREATE POLICY "Users can view own profile" ON profiles
     FOR SELECT USING (auth.uid() = id);
 
 CREATE POLICY "Users can update own profile" ON profiles
     FOR UPDATE USING (auth.uid() = id);
 
--- Trigger to create profile on signup
+-- Profile Trigger
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -49,28 +36,30 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Drop trigger if exists to allow re-running script safely
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 
--- 2. PORTFOLIOS
--- Stores cash, assets value, and active positions.
--- Positions are stored as a JSON array as requested: [{ symbol, entryPrice, amount... }]
+-- 3. PORTFOLIOS TABLE
 CREATE TABLE IF NOT EXISTS portfolios (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES auth.users NOT NULL, -- Constraint added via ALTER TABLE command above
+    user_id UUID REFERENCES auth.users NOT NULL, 
     cash NUMERIC NOT NULL DEFAULT 0,
-    assets NUMERIC NOT NULL DEFAULT 0, -- Total value of held assets
+    assets NUMERIC NOT NULL DEFAULT 0,
     initial_value NUMERIC NOT NULL DEFAULT 0,
-    positions JSONB DEFAULT '[]'::jsonb, -- Active positions as JSON
+    positions JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    CONSTRAINT portfolios_user_id_key UNIQUE (user_id)
 );
 
 ALTER TABLE portfolios ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own portfolio" ON portfolios;
+DROP POLICY IF EXISTS "Users can update own portfolio" ON portfolios;
+DROP POLICY IF EXISTS "Users can insert own portfolio" ON portfolios;
 
 CREATE POLICY "Users can view own portfolio" ON portfolios
     FOR SELECT USING (auth.uid() = user_id);
@@ -82,8 +71,7 @@ CREATE POLICY "Users can insert own portfolio" ON portfolios
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 
--- 3. TRADES
--- Logs every buy/sell execution.
+-- 4. TRADES TABLE
 CREATE TABLE IF NOT EXISTS trades (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     user_id UUID REFERENCES auth.users NOT NULL,
@@ -92,12 +80,15 @@ CREATE TABLE IF NOT EXISTS trades (
     price NUMERIC NOT NULL,
     amount NUMERIC NOT NULL,
     leverage NUMERIC DEFAULT 1,
-    pnl NUMERIC, -- Null for open trades, populated on close
-    reasoning TEXT, -- AI or Manual reasoning
+    pnl NUMERIC, 
+    reasoning TEXT, 
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 ALTER TABLE trades ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own trades" ON trades;
+DROP POLICY IF EXISTS "Users can insert own trades" ON trades;
 
 CREATE POLICY "Users can view own trades" ON trades
     FOR SELECT USING (auth.uid() = user_id);
@@ -106,8 +97,7 @@ CREATE POLICY "Users can insert own trades" ON trades
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 
--- 4. EQUITY HISTORY
--- Tracks performance over time for charts.
+-- 5. EQUITY HISTORY TABLE
 CREATE TABLE IF NOT EXISTS equity_history (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     user_id UUID REFERENCES auth.users NOT NULL,
@@ -117,6 +107,9 @@ CREATE TABLE IF NOT EXISTS equity_history (
 
 ALTER TABLE equity_history ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view own equity history" ON equity_history;
+DROP POLICY IF EXISTS "Users can insert own equity history" ON equity_history;
+
 CREATE POLICY "Users can view own equity history" ON equity_history
     FOR SELECT USING (auth.uid() = user_id);
 
@@ -124,14 +117,12 @@ CREATE POLICY "Users can insert own equity history" ON equity_history
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 
--- 5. AI ANALYSIS LOGS
--- Logs the AI's decision making process for transparency.
--- Automatically cleaned up after 1 day via trigger.
+-- 6. AI ANALYSIS LOGS TABLE
 CREATE TABLE IF NOT EXISTS ai_analysis_logs (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     user_id UUID REFERENCES auth.users NOT NULL,
     symbol TEXT NOT NULL,
-    action TEXT NOT NULL, -- BUY, SELL, HOLD
+    action TEXT NOT NULL,
     confidence NUMERIC,
     reasoning TEXT,
     strategy_used TEXT,
@@ -140,23 +131,29 @@ CREATE TABLE IF NOT EXISTS ai_analysis_logs (
 
 ALTER TABLE ai_analysis_logs ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view own analysis logs" ON ai_analysis_logs;
+DROP POLICY IF EXISTS "Users can insert own analysis logs" ON ai_analysis_logs;
+
 CREATE POLICY "Users can view own analysis logs" ON ai_analysis_logs
     FOR SELECT USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can insert own analysis logs" ON ai_analysis_logs
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
--- Function to clean up logs older than 1 day
+-- Cleanup Function
 CREATE OR REPLACE FUNCTION public.cleanup_old_analysis_logs()
 RETURNS TRIGGER AS $$
 BEGIN
+  -- Delete logs older than 24 hours
   DELETE FROM public.ai_analysis_logs
   WHERE created_at < (now() - INTERVAL '1 day');
-  RETURN NEW;
+  
+  -- Must return NULL for Statement-level triggers
+  RETURN NULL; 
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Trigger execution after new log insertion
+-- Cleanup Trigger
 DROP TRIGGER IF EXISTS trigger_cleanup_analysis_logs ON ai_analysis_logs;
 CREATE TRIGGER trigger_cleanup_analysis_logs
     AFTER INSERT ON ai_analysis_logs
