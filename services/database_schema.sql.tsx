@@ -13,6 +13,9 @@ export const DatabaseSchema = `
 
   -- 2. Add the unique constraint to prevent future duplicates and enable native UPSERT
   ALTER TABLE portfolios ADD CONSTRAINT portfolios_user_id_key UNIQUE (user_id);
+
+  -- 3. Add full_name to profiles if it doesn't exist
+  ALTER TABLE profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
 */
 -- ------------------------------------------------------------------
 
@@ -24,6 +27,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE IF NOT EXISTS profiles (
     id UUID REFERENCES auth.users NOT NULL PRIMARY KEY,
     email TEXT,
+    full_name TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -39,8 +43,8 @@ CREATE POLICY "Users can update own profile" ON profiles
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, email)
-  VALUES (new.id, new.email);
+  INSERT INTO public.profiles (id, email, full_name)
+  VALUES (new.id, new.email, new.raw_user_meta_data->>'full_name');
   RETURN new;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

@@ -47,7 +47,8 @@ import {
   Trash2,
   Wifi,
   WifiOff,
-  Cloud
+  Cloud,
+  Download
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradingChart } from './components/TradingChart';
@@ -174,8 +175,6 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session?.user) {
-        setUserProfile(prev => ({ ...prev, email: session.user.email || prev.email }));
-        // Load data from DB
         loadUserData(session.user.id);
       }
     });
@@ -183,7 +182,6 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session?.user) {
-        setUserProfile(prev => ({ ...prev, email: session.user.email || prev.email }));
         loadUserData(session.user.id);
       }
     });
@@ -193,9 +191,10 @@ export default function App() {
 
   const loadUserData = async (userId: string) => {
     try {
-        const [dbPortfolio, dbTrades] = await Promise.all([
+        const [dbPortfolio, dbTrades, dbProfile] = await Promise.all([
             db.getPortfolio(userId),
-            db.getTrades(userId)
+            db.getTrades(userId),
+            db.getProfile(userId)
         ]);
 
         if (dbPortfolio) {
@@ -206,8 +205,15 @@ export default function App() {
             await db.upsertPortfolio(userId, portfolio);
         }
 
-        if (dbTrades.length > 0) {
-            setTrades(dbTrades);
+        // CRITICAL FIX: Always set trades, even if empty, to overwrite any previous user's state
+        setTrades(dbTrades || []);
+
+        if (dbProfile) {
+          setUserProfile(prev => ({
+            ...prev,
+            name: dbProfile.full_name || prev.name, // Use DB name if available
+            email: dbProfile.email || prev.email
+          }));
         }
     } catch (e) {
         console.error("Failed to load user data", e);
@@ -217,8 +223,12 @@ export default function App() {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setSession(null);
-    // Optional: Clear local state on logout
-    // setPortfolio({ ... });
+    // Explicitly Clear local state on logout to prevent data leakage
+    setPortfolio({ cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH, assets: 0, avgEntryPrice: 0 });
+    setTrades([]);
+    setEquityHistory([]);
+    setLastAnalysis(null);
+    notify("Signed out successfully", "success");
   };
 
 
@@ -301,6 +311,40 @@ export default function App() {
     setHistoryPage(1);
   }, [historyFilterType, historyFilterPnL, historyFilterStartDate, historyFilterEndDate]);
 
+  const handleDownloadHistory = useCallback(() => {
+    if (filteredTrades.length === 0) {
+      notify("No trades to download", "error");
+      return;
+    }
+
+    const headers = ['Date', 'Symbol', 'Type', 'Price', 'Amount', 'Leverage', 'PnL', 'Reasoning'];
+    const rows = filteredTrades.map(t => [
+      t.timestamp.toISOString(),
+      t.symbol,
+      t.type,
+      t.price,
+      t.amount,
+      t.leverage,
+      t.pnl || 0,
+      `"${t.reasoning.replace(/"/g, '""')}"` // Escape quotes
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(r => r.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `trade_history_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    notify("Trade history exported", "success");
+  }, [filteredTrades, notify]);
+
   const handleResetSystem = useCallback(async () => {
     localStorage.removeItem(STORAGE_KEY);
     const emptyPortfolio = { cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH, assets: 0, avgEntryPrice: 0 };
@@ -381,11 +425,25 @@ export default function App() {
       setTargetModal(null);
   }, [targetModal, notify, getRoiFromPrice, portfolio, session]);
   
-  const handleProfileUpdate = useCallback(() => {
+  const handleProfileUpdate = useCallback(async () => {
     setUserProfile(tempProfile);
     setIsEditingProfile(false);
-    notify("Profile settings updated", "success");
-  }, [tempProfile, notify]);
+    
+    if (session?.user) {
+        // Update in DB
+        const error = await db.updateProfile(session.user.id, {
+            full_name: tempProfile.name,
+            email: tempProfile.email
+        });
+        if (error) {
+            notify("Failed to save profile changes to cloud", "error");
+        } else {
+            notify("Profile settings updated", "success");
+        }
+    } else {
+        notify("Profile updated locally", "success");
+    }
+  }, [tempProfile, notify, session]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1407,6 +1465,18 @@ export default function App() {
                         <span className="text-[10px] font-black bg-slate-950 text-slate-500 px-3 py-1 rounded-full border border-slate-800">{trades.length} LOGS</span>
                     </div>
                     <div className="flex gap-2">
+                        {isHistoryExpanded && (
+                            <button 
+                                onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    handleDownloadHistory(); 
+                                }}
+                                className="p-2 rounded-xl transition-all bg-slate-800 text-slate-400 hover:text-emerald-400 hover:bg-slate-700 active:scale-95"
+                                title="Download CSV"
+                            >
+                                <Download className="w-4 h-4" />
+                            </button>
+                        )}
                         {isHistoryExpanded && (
                             <button 
                             onClick={(e) => { e.stopPropagation(); setShowFilters(!showFilters); }}

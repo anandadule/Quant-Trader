@@ -4,6 +4,35 @@ import { Portfolio, Trade, AIAnalysis, Position } from '../types';
 
 export const db = {
   /**
+   * Fetch user's profile (name, email, etc.)
+   */
+  async getProfile(userId: string) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+      
+    if (error) {
+      console.error('Error fetching profile:', error);
+      return null;
+    }
+    return data;
+  },
+
+  /**
+   * Update user's profile
+   */
+  async updateProfile(userId: string, updates: { full_name?: string; email?: string }) {
+    const { error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', userId);
+      
+    return error;
+  },
+
+  /**
    * Fetch user's portfolio. If none exists, returns null.
    * Uses limit(1) to handle cases where duplicate rows might exist due to missing unique constraints.
    */

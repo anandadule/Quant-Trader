@@ -1,11 +1,13 @@
+
 import React, { useState } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { Mail, Lock, Loader2, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, Loader2, ArrowRight, ShieldCheck, User } from 'lucide-react';
 
 export const Auth = () => {
   const [loading, setLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [message, setMessage] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
@@ -25,6 +27,11 @@ export const Auth = () => {
         const { error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              full_name: fullName,
+            },
+          },
         });
         if (error) throw error;
         setMessage({ text: 'Check your email for the login link!', type: 'success' });
@@ -54,6 +61,23 @@ export const Auth = () => {
         </div>
 
         <form onSubmit={handleAuth} className="space-y-4">
+          {!isLogin && (
+            <div className="space-y-1 animate-slide-up">
+              <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Full Name</label>
+              <div className="relative group">
+                <User className="w-4 h-4 text-slate-500 absolute left-4 top-4 group-focus-within:text-emerald-400 transition-colors" />
+                <input
+                  type="text"
+                  placeholder="John Doe"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required={!isLogin}
+                  className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-3.5 pl-11 pr-4 text-sm font-bold text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 outline-none transition-all placeholder:text-slate-700"
+                />
+              </div>
+            </div>
+          )}
+
           <div className="space-y-1">
             <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Email Address</label>
             <div className="relative group">
