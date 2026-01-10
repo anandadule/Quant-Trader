@@ -126,6 +126,7 @@ CREATE POLICY "Users can insert own equity history" ON equity_history
 
 -- 5. AI ANALYSIS LOGS
 -- Logs the AI's decision making process for transparency.
+-- Automatically cleaned up after 1 day via trigger.
 CREATE TABLE IF NOT EXISTS ai_analysis_logs (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     user_id UUID REFERENCES auth.users NOT NULL,
@@ -144,4 +145,20 @@ CREATE POLICY "Users can view own analysis logs" ON ai_analysis_logs
 
 CREATE POLICY "Users can insert own analysis logs" ON ai_analysis_logs
     FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Function to clean up logs older than 1 day
+CREATE OR REPLACE FUNCTION public.cleanup_old_analysis_logs()
+RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM public.ai_analysis_logs
+  WHERE created_at < (now() - INTERVAL '1 day');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger execution after new log insertion
+DROP TRIGGER IF EXISTS trigger_cleanup_analysis_logs ON ai_analysis_logs;
+CREATE TRIGGER trigger_cleanup_analysis_logs
+    AFTER INSERT ON ai_analysis_logs
+    FOR EACH STATEMENT EXECUTE FUNCTION public.cleanup_old_analysis_logs();
 `;
