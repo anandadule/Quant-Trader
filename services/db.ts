@@ -22,19 +22,21 @@ export const db = {
 
   /**
    * Update user's profile
+   * Uses upsert to ensure the profile exists even if the signup trigger failed.
    */
   async updateProfile(userId: string, updates: { full_name?: string; email?: string }) {
     const { error } = await supabase
       .from('profiles')
-      .update(updates)
-      .eq('id', userId);
+      .upsert({
+        id: userId,
+        ...updates
+      });
       
     return error;
   },
 
   /**
    * Fetch user's portfolio. If none exists, returns null.
-   * Uses limit(1) to handle cases where duplicate rows might exist due to missing unique constraints.
    */
   async getPortfolio(userId: string): Promise<Portfolio | null> {
     const { data, error } = await supabase
@@ -55,55 +57,37 @@ export const db = {
       cash: Number(data.cash),
       assets: Number(data.assets),
       initialValue: Number(data.initial_value),
-      avgEntryPrice: 0, // Calculated field, not stored
+      avgEntryPrice: 0, // Calculated field, not persistent
       positions: (data.positions as unknown as Position[]) || []
     };
   },
 
   /**
    * Create or Update the user's portfolio
-   * Implements a manual "check-then-write" strategy to be robust against missing database constraints.
+   * Uses atomic UPSERT to handle race conditions and simplify logic.
    */
   async upsertPortfolio(userId: string, portfolio: Portfolio) {
-    // 1. Check if a record exists for this user
-    const { data: existingRows, error: fetchError } = await supabase
+    // Sanitize positions to ensure no undefined values or non-serializable objects
+    const cleanPositions = portfolio.positions.map(p => ({
+        ...p,
+        stopLossPct: p.stopLossPct || 0,
+        takeProfitPct: p.takeProfitPct || 0,
+        // Ensure no Date objects if they exist
+    }));
+
+    // Uses the unique constraint on 'user_id' to automatically Insert or Update
+    const { error } = await supabase
       .from('portfolios')
-      .select('id')
-      .eq('user_id', userId)
-      .limit(1);
-
-    if (fetchError) {
-      console.error('Error checking portfolio state:', fetchError);
-      return;
-    }
-
-    const payload = {
+      .upsert({
+        user_id: userId,
         cash: portfolio.cash,
         assets: portfolio.assets,
         initial_value: portfolio.initialValue,
-        positions: portfolio.positions,
+        positions: cleanPositions as any, // Supabase handles JSONB conversion
         updated_at: new Date().toISOString()
-    };
+      }, { onConflict: 'user_id' });
 
-    if (existingRows && existingRows.length > 0) {
-      // 2. UPDATE existing record
-      const { error: updateError } = await supabase
-        .from('portfolios')
-        .update(payload)
-        .eq('id', existingRows[0].id);
-
-      if (updateError) console.error('Error updating portfolio:', updateError);
-    } else {
-      // 3. INSERT new record
-      const { error: insertError } = await supabase
-        .from('portfolios')
-        .insert({
-          user_id: userId,
-          ...payload
-        });
-
-      if (insertError) console.error('Error creating portfolio:', insertError);
-    }
+    if (error) console.error('Error upserting portfolio:', error);
   },
 
   /**
@@ -149,7 +133,8 @@ export const db = {
       price: Number(t.price),
       amount: Number(t.amount),
       leverage: Number(t.leverage),
-      pnl: t.pnl ? Number(t.pnl) : undefined,
+      // Fix: Ensure 0 is not treated as undefined
+      pnl: (t.pnl !== null && t.pnl !== undefined) ? Number(t.pnl) : undefined,
       reasoning: t.reasoning,
       timestamp: new Date(t.timestamp)
     }));

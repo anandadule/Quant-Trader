@@ -24,7 +24,7 @@ export const Auth = () => {
         });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -34,9 +34,17 @@ export const Auth = () => {
           },
         });
         if (error) throw error;
-        setMessage({ text: 'Check your email for the login link!', type: 'success' });
+        
+        // Check if session was created immediately (Email confirmation disabled)
+        if (data.session) {
+             setMessage({ text: 'Account created! Logging in...', type: 'success' });
+             // The App component will verify the session via onAuthStateChange
+        } else {
+             setMessage({ text: 'Check your email for the login link!', type: 'success' });
+        }
       }
     } catch (error: any) {
+      console.error("Auth Error:", error);
       setMessage({ text: error.message, type: 'error' });
     } finally {
       setLoading(false);

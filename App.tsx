@@ -91,6 +91,12 @@ const getSavedItem = (key: string, defaultValue: any) => {
     const parsed = JSON.parse(saved);
     const value = parsed[key];
     if (value === undefined) return defaultValue;
+    
+    // Safety check for portfolio positions to ensure array type
+    if (key === 'portfolio' && value && !Array.isArray(value.positions)) {
+       return { ...value, positions: [] };
+    }
+
     if (key === 'trades') {
       return value.map((t: any) => ({ ...t, timestamp: new Date(t.timestamp) }));
     }
@@ -102,7 +108,7 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   
   const [portfolio, setPortfolio] = useState<Portfolio>(() => 
-    getSavedItem('portfolio', { cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH })
+    getSavedItem('portfolio', { cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH, assets: 0, avgEntryPrice: 0 })
   );
   const [trades, setTrades] = useState<Trade[]>(() => getSavedItem('trades', []));
   const [mode, setMode] = useState<TradingMode>(() => getSavedItem('mode', TradingMode.MANUAL));
@@ -175,21 +181,21 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session?.user) {
-        loadUserData(session.user.id);
+        loadUserData(session.user.id, session.user);
       }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session?.user) {
-        loadUserData(session.user.id);
+        loadUserData(session.user.id, session.user);
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  const loadUserData = async (userId: string) => {
+  const loadUserData = async (userId: string, user: any) => {
     try {
         const [dbPortfolio, dbTrades, dbProfile] = await Promise.all([
             db.getPortfolio(userId),
@@ -199,24 +205,32 @@ export default function App() {
 
         if (dbPortfolio) {
             setPortfolio(dbPortfolio);
-            notify("Portfolio synced from cloud", "success");
         } else {
-            // First time setup in DB
-            await db.upsertPortfolio(userId, portfolio);
+            console.log("Initializing new user portfolio...");
+            const defaultPortfolio = { cash: INITIAL_CASH, positions: [], initialValue: INITIAL_CASH, assets: 0, avgEntryPrice: 0 };
+            await db.upsertPortfolio(userId, defaultPortfolio);
+            setPortfolio(defaultPortfolio);
         }
 
-        // CRITICAL FIX: Always set trades, even if empty, to overwrite any previous user's state
-        setTrades(dbTrades || []);
-
-        if (dbProfile) {
-          setUserProfile(prev => ({
-            ...prev,
-            name: dbProfile.full_name || prev.name, // Use DB name if available
-            email: dbProfile.email || prev.email
-          }));
+        if (!dbProfile) {
+           console.log("Initializing new user profile...");
+           const email = user?.email || "";
+           const metaName = user?.user_metadata?.full_name || "Trader";
+           await db.updateProfile(userId, { email, full_name: metaName });
+        } else {
+            setUserProfile(prev => ({
+                ...prev,
+                name: dbProfile.full_name || prev.name,
+                email: dbProfile.email || prev.email
+            }));
         }
+
+        if (dbTrades) setTrades(dbTrades);
+        
+        notify("Account synchronized", "success");
     } catch (e) {
         console.error("Failed to load user data", e);
+        notify("Working offline (Sync Failed)", "error");
     }
   };
 
@@ -256,7 +270,10 @@ export default function App() {
     let margin = 0;
     let value = 0;
 
-    portfolio.positions.forEach(pos => {
+    // Safety check: ensure portfolio.positions is an array
+    const safePositions = Array.isArray(portfolio.positions) ? portfolio.positions : [];
+
+    safePositions.forEach(pos => {
         const markPrice = priceMap[pos.symbol] || pos.entryPrice;
         const diff = markPrice - pos.entryPrice;
         const posPnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
@@ -518,10 +535,13 @@ export default function App() {
         takeProfitPct: takeProfitPct
     };
     
+    // Safety check for existing positions array
+    const currentPositions = Array.isArray(portfolio.positions) ? portfolio.positions : [];
+    
     const newPortfolio = {
         ...portfolio,
         cash: portfolio.cash - marginReq,
-        positions: [newPosition, ...portfolio.positions]
+        positions: [newPosition, ...currentPositions]
     };
 
     const newTrade: Trade = {
@@ -548,7 +568,7 @@ export default function App() {
 
   // Close Specific Position
   const handleClosePosition = useCallback(async (id: string) => {
-    const pos = portfolio.positions.find(p => p.id === id);
+    const pos = (portfolio.positions || []).find(p => p.id === id);
     if (!pos) return;
 
     const closePrice = priceMap[pos.symbol] || pos.entryPrice;
@@ -571,7 +591,7 @@ export default function App() {
     const newPortfolio = {
         ...portfolio,
         cash: portfolio.cash + marginReleased + pnl,
-        positions: portfolio.positions.filter(p => p.id !== id)
+        positions: (portfolio.positions || []).filter(p => p.id !== id)
     };
 
     setTrades(t => [closingTrade, ...t]);
@@ -587,7 +607,7 @@ export default function App() {
 
   // Close All Positions
   const handleExitAll = useCallback(() => {
-    portfolio.positions.forEach(pos => handleClosePosition(pos.id));
+    (portfolio.positions || []).forEach(pos => handleClosePosition(pos.id));
   }, [portfolio.positions, handleClosePosition]);
 
   // Risk Management / Auto Close
@@ -599,7 +619,8 @@ export default function App() {
       }
       
       // Check TP/SL for each position
-      portfolio.positions.forEach(pos => {
+      const safePositions = Array.isArray(portfolio.positions) ? portfolio.positions : [];
+      safePositions.forEach(pos => {
           const mark = priceMap[pos.symbol] || pos.entryPrice;
           const diff = mark - pos.entryPrice;
           const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
@@ -1381,288 +1402,232 @@ export default function App() {
               {/* Order Management Panel */}
               <div className="order-2 xl:col-span-4 flex flex-col gap-6 md:gap-10">
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-5 md:p-8 shadow-2xl xl:sticky xl:top-10">
-                  <h3 className="font-black text-xl mb-6 md:mb-10 flex justify-between items-center"><span>Order Management</span><span className="text-[10px] font-black text-slate-600 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800/50">SECURED SIM</span></h3>
-                  <div className="flex flex-col gap-6 md:gap-10">
+                  <h3 className="font-black text-xl mb-6 md:mb-10 flex justify-between items-center">
+                    <span className="flex items-center gap-3"><Coins className="w-6 h-6 text-emerald-400" /> Order Entry</span>
+                    <span className="text-[10px] font-black text-slate-500 bg-slate-950 border border-slate-800 px-3 py-1 rounded-full uppercase tracking-widest">{currentSymbol}</span>
+                  </h3>
+                  
+                  {/* Leverage Slider */}
+                  <div className="mb-8">
+                    <div className="flex justify-between items-center mb-4">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Leverage</label>
+                      <span className="text-xl font-black text-emerald-400 mono">{selectedLeverage}x</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="1" 
+                      max="125" 
+                      value={selectedLeverage} 
+                      onChange={(e) => setSelectedLeverage(parseInt(e.target.value))}
+                      className="w-full h-2 bg-slate-950 rounded-full appearance-none accent-emerald-500 cursor-pointer border border-slate-800"
+                    />
+                    <div className="flex justify-between mt-2 text-[9px] font-black text-slate-600 uppercase">
+                      <span>1x</span>
+                      <span>25x</span>
+                      <span>50x</span>
+                      <span>75x</span>
+                      <span>100x</span>
+                      <span>125x</span>
+                    </div>
+                  </div>
+
+                  {/* Lot Size & Margin */}
+                  <div className="grid grid-cols-2 gap-4 mb-8">
                     <div>
-                      <div className="flex justify-between items-center mb-4"><span className="text-[11px] text-slate-500 font-black uppercase tracking-widest">Target Leverage</span><span className="text-xl font-black mono text-emerald-400 bg-emerald-500/5 px-4 py-1.5 rounded-xl border border-emerald-500/20">{selectedLeverage}X</span></div>
-                      <input type="range" min="5" max="100" step="5" value={selectedLeverage} onChange={(e) => setSelectedLeverage(parseInt(e.target.value))} className="w-full h-2 bg-slate-800 rounded-full appearance-none accent-emerald-500 cursor-pointer" />
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Lot Size</label>
+                      <input 
+                        type="number" 
+                        value={lotSize}
+                        onChange={(e) => setLotSize(e.target.value)}
+                        step="0.01"
+                        min="0.01"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-bold text-white focus:border-emerald-500 outline-none transition-all"
+                      />
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 md:gap-6">
-                      <div className="flex flex-col gap-3"><div className="flex justify-between items-center"><span className="text-[10px] text-slate-600 font-black uppercase">Stop Loss</span><span className="text-xs font-black text-rose-400">{stopLossPct}%</span></div><input type="range" min="1" max="50" step="1" value={stopLossPct} onChange={(e) => setStopLossPct(parseInt(e.target.value))} className="w-full h-1 bg-slate-800 appearance-none accent-rose-500" /></div>
-                      <div className="flex flex-col gap-3"><div className="flex justify-between items-center"><span className="text-[10px] text-slate-600 font-black uppercase">Profit Take</span><span className="text-xs font-black text-emerald-400">{takeProfitPct}%</span></div><input type="range" min="5" max="200" step="5" value={takeProfitPct} onChange={(e) => setTakeProfitPct(parseInt(e.target.value))} className="w-full h-1 bg-slate-800 appearance-none accent-emerald-500" /></div>
-                    </div>
-
-                    <div className="bg-slate-950/60 p-4 md:p-6 rounded-3xl border border-slate-800/60 shadow-inner">
-                      <div className="flex justify-between items-center mb-4">
-                        <span className="text-[11px] text-slate-500 font-black uppercase flex items-center gap-2">
-                          <Coins className="w-4 h-4 text-blue-400" /> Position Size
-                        </span>
-                        <span className="text-[10px] font-bold text-slate-600 uppercase">Units</span>
-                      </div>
-                      
-                      <div className="relative flex items-center bg-slate-900 border border-slate-800 rounded-2xl p-1.5 group focus-within:border-blue-500/50 transition-colors">
-                        <button 
-                          onClick={() => setLotSize((Math.max(0.01, parseFloat(lotSize) - 0.01)).toFixed(2))} 
-                          className="w-12 h-12 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition-all active:scale-95 border border-slate-700/50 shadow-lg"
-                        >
-                          <Minus className="w-5 h-5" />
-                        </button>
-                        
-                        <div className="flex-1 flex flex-col items-center justify-center px-2">
-                          <input 
-                            type="number" 
-                            min="0.01" 
-                            step="0.01" 
-                            value={lotSize} 
-                            onChange={(e) => setLotSize(e.target.value)} 
-                            className="w-full bg-transparent text-center font-black mono text-3xl text-white outline-none placeholder-slate-700"
-                            placeholder="0.00"
-                          />
-                        </div>
-
-                        <button 
-                          onClick={() => setLotSize((parseFloat(lotSize) + 0.01).toFixed(2))} 
-                          className="w-12 h-12 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition-all active:scale-95 border border-slate-700/50 shadow-lg"
-                        >
-                          <Plus className="w-5 h-5" />
-                        </button>
-                      </div>
-                      
-                      <div className="grid grid-cols-4 gap-2 mt-3">
-                        {['0.01', '0.10', '0.50', '1.00'].map(val => (
-                          <button 
-                            key={val}
-                            onClick={() => setLotSize(val)}
-                            className={`py-2 rounded-lg text-[9px] font-black transition-all border ${lotSize === val ? 'bg-blue-500/20 border-blue-500/50 text-blue-400' : 'bg-slate-900 border-slate-800 text-slate-600 hover:bg-slate-800 hover:text-slate-400'}`}
-                          >
-                            {val}
-                          </button>
-                        ))}
+                    <div>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Margin Req</label>
+                      <div className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-bold text-slate-400 flex items-center gap-1">
+                        $ <span className="text-white">{estimatedMargin.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
                       </div>
                     </div>
+                  </div>
 
-                    <div className="flex justify-between items-center px-4 py-2 bg-slate-950/30 rounded-xl border border-slate-800/50">
-                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Required Margin</span>
-                      <span className={`text-sm font-black mono ${estimatedMargin > portfolio.cash ? 'text-rose-400' : 'text-slate-200'}`}>${estimatedMargin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  {/* TP / SL Settings */}
+                   <div className="grid grid-cols-2 gap-4 mb-8">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block flex justify-between">
+                          <span>Take Profit</span>
+                          <span className="text-emerald-500">{takeProfitPct}%</span>
+                      </label>
+                      <input 
+                        type="range" 
+                        min="1" max="500" step="1"
+                        value={takeProfitPct}
+                        onChange={(e) => setTakeProfitPct(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-slate-950 rounded-full appearance-none accent-emerald-500 cursor-pointer"
+                      />
                     </div>
+                     <div>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block flex justify-between">
+                          <span>Stop Loss</span>
+                          <span className="text-rose-500">{stopLossPct}%</span>
+                      </label>
+                      <input 
+                        type="range" 
+                        min="1" max="95" step="1"
+                        value={stopLossPct}
+                        onChange={(e) => setStopLossPct(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-slate-950 rounded-full appearance-none accent-rose-500 cursor-pointer"
+                      />
+                    </div>
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-4 md:gap-6">
-                      <button onClick={() => executeTrade('BUY', currentPrice, "Manual Long Strategy")} className="group py-4 md:py-8 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/20 rounded-[2rem] font-black transition-all shadow-xl flex flex-col items-center gap-3 active:scale-95"><ArrowUpCircle className="w-8 h-8 md:w-12 md:h-12 group-hover:-translate-y-1 transition-transform" /><span>LONG</span></button>
-                      <button onClick={() => executeTrade('SELL', currentPrice, "Manual Short Strategy")} className="group py-4 md:py-8 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-slate-950 border border-rose-500/20 rounded-[2rem] font-black transition-all shadow-xl flex flex-col items-center gap-3 active:scale-95"><ArrowDownCircle className="w-8 h-8 md:w-12 md:h-12 group-hover:translate-y-1 transition-transform" /><span>SHORT</span></button>
-                    </div>
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => executeTrade('BUY', currentPrice, 'Manual Long')} 
+                      disabled={portfolio.cash < estimatedMargin || currentPrice === 0}
+                      className="flex-1 py-5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-emerald-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-1"
+                    >
+                      <span className="text-sm">Long</span>
+                      <span className="text-[9px] opacity-75">{currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
+                    </button>
+                    <button 
+                      onClick={() => executeTrade('SELL', currentPrice, 'Manual Short')} 
+                      disabled={portfolio.cash < estimatedMargin || currentPrice === 0}
+                      className="flex-1 py-5 bg-rose-500 hover:bg-rose-400 text-slate-950 rounded-xl font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-rose-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-1"
+                    >
+                      <span className="text-sm">Short</span>
+                      <span className="text-[9px] opacity-75">{currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
+                    </button>
                   </div>
                 </div>
 
-                {/* History Panel (re-adding logic from previous App.tsx but omitted here for brevity if it was duplicate, but sticking to provided structure above) */}
-                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl transition-all">
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl overflow-hidden transition-all">
                   <div 
-                    className="flex items-center justify-between cursor-pointer group mb-2" 
+                    className="flex items-center justify-between cursor-pointer group mb-6"
                     onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
                   >
-                    <div className="flex items-center gap-4">
-                        <h3 className="font-black text-xl flex items-center gap-2"><span>Trade History</span><History className="w-6 h-6 text-slate-700 group-hover:text-emerald-500 transition-colors" /></h3>
-                        <span className="text-[10px] font-black bg-slate-950 text-slate-500 px-3 py-1 rounded-full border border-slate-800">{trades.length} LOGS</span>
-                    </div>
-                    <div className="flex gap-2">
-                        {isHistoryExpanded && (
-                            <button 
-                                onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    handleDownloadHistory(); 
-                                }}
-                                className="p-2 rounded-xl transition-all bg-slate-800 text-slate-400 hover:text-emerald-400 hover:bg-slate-700 active:scale-95"
-                                title="Download CSV"
-                            >
-                                <Download className="w-4 h-4" />
-                            </button>
-                        )}
-                        {isHistoryExpanded && (
-                            <button 
+                    <h3 className="font-black text-xl flex items-center gap-4 text-slate-200">
+                      <History className="w-6 h-6 text-blue-400" /> Trade Ledger
+                    </h3>
+                    <div className="flex items-center gap-2">
+                       <button 
                             onClick={(e) => { e.stopPropagation(); setShowFilters(!showFilters); }}
-                            className={`p-2 rounded-xl transition-all ${showFilters ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                            >
+                            className={`p-2 rounded-lg transition-all ${showFilters ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                        >
                             <Filter className="w-4 h-4" />
-                            </button>
-                        )}
-                        <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isHistoryExpanded ? 'rotate-180' : ''}`}>
+                       </button>
+                       <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isHistoryExpanded ? 'rotate-180' : ''}`}>
                             <ChevronDown className="w-4 h-4" />
-                        </button>
+                       </button>
                     </div>
                   </div>
 
                   {isHistoryExpanded && (
-                      <div className="animate-slide-up mt-8">
+                    <div className="animate-slide-up">
                         {showFilters && (
-                            <div className="mb-6 p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50 grid grid-cols-2 gap-4 animate-slide-up">
-                            <div className="col-span-1">
-                                <label className="text-[9px] font-black text-slate-500 uppercase block mb-2">Type</label>
-                                <select 
-                                value={historyFilterType} 
-                                onChange={(e) => setHistoryFilterType(e.target.value as any)}
-                                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-[10px] font-bold text-slate-300 focus:border-emerald-500 outline-none"
-                                >
-                                <option value="ALL">All Types</option>
-                                <option value="BUY">Buy Only</option>
-                                <option value="SELL">Sell Only</option>
-                                </select>
-                            </div>
-                            <div className="col-span-1">
-                                <label className="text-[9px] font-black text-slate-500 uppercase block mb-2">Outcome</label>
-                                <select 
-                                value={historyFilterPnL} 
-                                onChange={(e) => setHistoryFilterPnL(e.target.value as any)}
-                                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-[10px] font-bold text-slate-300 focus:border-emerald-500 outline-none"
-                                >
-                                <option value="ALL">All Outcomes</option>
-                                <option value="PROFIT">Profit Only</option>
-                                <option value="LOSS">Loss Only</option>
-                                </select>
-                            </div>
-                            <div className="col-span-1">
-                                <label className="text-[9px] font-black text-slate-500 uppercase block mb-2">Start Date</label>
-                                <div className="relative">
-                                <input 
-                                    type="date" 
-                                    value={historyFilterStartDate}
-                                    onChange={(e) => setHistoryFilterStartDate(e.target.value)}
-                                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-[10px] font-bold text-slate-300 focus:border-emerald-500 outline-none"
-                                />
+                            <div className="mb-6 p-4 bg-slate-950 rounded-xl border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 animate-slide-up">
+                                <div>
+                                    <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">Type</label>
+                                    <select value={historyFilterType} onChange={e => setHistoryFilterType(e.target.value as any)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none">
+                                        <option value="ALL">All Sides</option>
+                                        <option value="BUY">Long / Buy</option>
+                                        <option value="SELL">Short / Sell</option>
+                                    </select>
                                 </div>
-                            </div>
-                            <div className="col-span-1">
-                                <label className="text-[9px] font-black text-slate-500 uppercase block mb-2">End Date</label>
-                                <div className="relative">
-                                <input 
-                                    type="date" 
-                                    value={historyFilterEndDate}
-                                    onChange={(e) => setHistoryFilterEndDate(e.target.value)}
-                                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-[10px] font-bold text-slate-300 focus:border-emerald-500 outline-none"
-                                />
+                                <div>
+                                    <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">Result</label>
+                                    <select value={historyFilterPnL} onChange={e => setHistoryFilterPnL(e.target.value as any)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none">
+                                        <option value="ALL">All Results</option>
+                                        <option value="PROFIT">Win Only</option>
+                                        <option value="LOSS">Loss Only</option>
+                                    </select>
                                 </div>
-                            </div>
+                                <div>
+                                    <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">From Date</label>
+                                    <input type="date" value={historyFilterStartDate} onChange={e => setHistoryFilterStartDate(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none" />
+                                </div>
+                                <div>
+                                     <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">To Date</label>
+                                    <input type="date" value={historyFilterEndDate} onChange={e => setHistoryFilterEndDate(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none" />
+                                </div>
+                                <div className="col-span-2 md:col-span-4 flex justify-end">
+                                     <button onClick={handleDownloadHistory} className="flex items-center gap-2 text-[10px] font-black text-emerald-400 hover:text-emerald-300 uppercase tracking-widest bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-2 rounded-lg transition-all border border-emerald-500/20"><Download className="w-3 h-3" /> Export CSV</button>
+                                </div>
                             </div>
                         )}
 
-                        <div className="space-y-4">
-                            {displayedTrades.length > 0 ? displayedTrades.map(t => (
-                            <div key={t.id} className="p-6 bg-slate-950/50 border border-slate-800 rounded-3xl flex flex-col gap-3 group hover:border-slate-600 transition-colors">
-                                <div className="flex justify-between items-center">
-                                    <div className="flex items-center gap-3">
-                                    <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg ${t.type === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>{t.type}</span>
-                                    <span className="text-[11px] font-black text-slate-400">{t.symbol || 'Unknown'}</span>
-                                    </div>
-                                    <span className="text-[10px] font-bold text-slate-600 mono">{t.timestamp.toLocaleTimeString()} <span className="text-slate-700 mx-1">|</span> {t.timestamp.toLocaleDateString()}</span>
+                        <div className="space-y-3">
+                            {displayedTrades.length > 0 ? displayedTrades.map((trade) => (
+                            <div key={trade.id} className="p-4 rounded-2xl bg-slate-950/50 border border-slate-800/50 hover:bg-slate-800/50 transition-colors flex justify-between items-center group">
+                                <div className="flex items-center gap-4">
+                                <div className={`p-2.5 rounded-xl ${trade.pnl && trade.pnl > 0 ? 'bg-emerald-500/10 text-emerald-400' : trade.pnl && trade.pnl < 0 ? 'bg-rose-500/10 text-rose-400' : 'bg-slate-800 text-slate-400'}`}>
+                                    {trade.type === 'BUY' ? <ArrowUpCircle className="w-5 h-5" /> : <ArrowDownCircle className="w-5 h-5" />}
                                 </div>
-                                <div className="flex justify-between items-end">
-                                    <div className="text-base font-black mono text-slate-200">${t.price.toLocaleString()}</div>
-                                    <div className="text-right">
-                                        <div className="text-[10px] font-bold text-slate-500 mb-0.5">Qty: {t.amount}</div>
-                                        {t.pnl !== undefined && (() => {
-                                            const entryPrice = t.type === 'SELL' ? t.price - (t.pnl / t.amount) : t.price + (t.pnl / t.amount);
-                                            const margin = (entryPrice * t.amount) / t.leverage;
-                                            const roi = margin > 0 ? (t.pnl / margin) * 100 : 0;
-                                            return (
-                                                <div className={`text-[11px] font-black ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                                    {t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}
-                                                    <span className="text-[10px] opacity-75 ml-1">({roi >= 0 ? '+' : ''}{roi.toFixed(2)}%)</span>
-                                                </div>
-                                            );
-                                        })()}
+                                <div>
+                                    <div className="flex items-center gap-2 mb-0.5">
+                                        <span className={`text-xs font-black ${trade.type === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>{trade.type}</span>
+                                        <span className="text-[10px] font-black text-slate-500 uppercase bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{trade.symbol}</span>
                                     </div>
+                                    <span className="text-[10px] font-bold text-slate-500">{trade.timestamp.toLocaleString()}</span>
                                 </div>
-                                <div className="text-[10px] text-slate-600 truncate italic group-hover:text-slate-400 transition-colors border-t border-slate-800/50 pt-2 mt-1">{t.reasoning}</div>
+                                </div>
+                                <div className="text-right">
+                                <div className={`text-sm font-black mono ${trade.pnl && trade.pnl > 0 ? 'text-emerald-400' : trade.pnl && trade.pnl < 0 ? 'text-rose-400' : 'text-slate-200'}`}>
+                                    {trade.pnl ? `${trade.pnl > 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : 'OPEN'}
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-600">@ ${trade.price.toLocaleString()}</span>
+                                </div>
                             </div>
-                            )) : <div className="text-center py-20 text-slate-700 font-black text-[10px] uppercase opacity-40 tracking-[0.2em]">Void Log</div>}
+                            )) : (
+                                <div className="py-12 text-center text-slate-600 uppercase font-black text-xs tracking-[0.2em] opacity-50">No trading records found</div>
+                            )}
                         </div>
-
+                        
+                        {/* Pagination */}
                         {totalHistoryPages > 1 && (
-                            <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-800/50">
-                            <button 
-                                onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
-                                disabled={historyPage === 1}
-                                className="p-3 bg-slate-800 rounded-xl text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-30 disabled:hover:bg-slate-800 disabled:hover:text-slate-400 transition-all"
-                            >
-                                <ChevronLeft className="w-4 h-4" />
-                            </button>
-                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Page {historyPage} of {totalHistoryPages}</span>
-                            <button 
-                                onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))}
-                                disabled={historyPage === totalHistoryPages}
-                                className="p-3 bg-slate-800 rounded-xl text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-30 disabled:hover:bg-slate-800 disabled:hover:text-slate-400 transition-all"
-                            >
-                                <ChevronRight className="w-4 h-4" />
-                            </button>
+                            <div className="flex justify-center items-center gap-4 mt-6">
+                                <button 
+                                    onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                                    disabled={historyPage === 1}
+                                    className="p-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 disabled:opacity-30 hover:bg-slate-800 transition-all"
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Page {historyPage} of {totalHistoryPages}</span>
+                                <button 
+                                    onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))}
+                                    disabled={historyPage === totalHistoryPages}
+                                    className="p-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 disabled:opacity-30 hover:bg-slate-800 transition-all"
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
                             </div>
                         )}
-                      </div>
+                    </div>
                   )}
                 </div>
               </div>
             </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 h-[300px] md:h-[400px] relative overflow-hidden shadow-2xl mb-12 flex flex-col">
-              <h3 className="text-[10px] font-black text-slate-500 uppercase mb-6 flex items-center gap-3 shrink-0"><Activity className="w-4 h-4" /> Global Performance Graph</h3>
-              <div className="w-full flex-1 min-h-0 relative">
-                <div className="absolute inset-0">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={equityHistory} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                      <defs><linearGradient id="eqG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient></defs>
-                      <Area type="monotone" dataKey="equity" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#eqG)" isAnimationActive={false} />
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '10px', color: '#f8fafc' }} 
-                        labelFormatter={(val) => new Date(val).toLocaleString()}
-                        formatter={(val: number) => [`$${val.toFixed(2)}`, 'Equity']}
-                      />
-                      <XAxis 
-                        dataKey="timestamp" 
-                        tickFormatter={(val) => new Date(val).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        stroke="#334155"
-                        tick={{ fill: '#64748b', fontSize: 10 }}
-                        tickLine={false}
-                        axisLine={false}
-                        minTickGap={50}
-                      />
-                      <YAxis 
-                        domain={['auto', 'auto']}
-                        stroke="#334155"
-                        tick={{ fill: '#64748b', fontSize: 10 }}
-                        tickFormatter={(val) => `$${val}`}
-                        tickLine={false}
-                        axisLine={false}
-                        width={60}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
           </>
-        ) : renderSettings()}
+        ) : (
+          renderSettings()
+        )}
       </main>
 
       {/* Notifications */}
-      <div className="fixed bottom-8 right-8 flex flex-col gap-4 z-[100] pointer-events-none max-w-[90vw] sm:max-w-md">
+      <div className="fixed bottom-6 right-6 z-[200] flex flex-col gap-2 pointer-events-none">
         {notifications.map((n, i) => (
-          <div key={i} className={`px-8 py-5 rounded-[1.5rem] shadow-2xl border flex items-center gap-6 animate-slide-up pointer-events-auto backdrop-blur-2xl ${n.type === 'success' ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-400' : n.type === 'error' ? 'bg-rose-950/90 border-rose-500/40 text-rose-400' : 'bg-slate-900/90 border-slate-700 text-slate-200'}`}>
-            <div className={`p-2.5 rounded-xl ${n.type === 'success' ? 'bg-emerald-500/20' : n.type === 'error' ? 'bg-rose-500/20' : 'bg-slate-700/50'}`}>{n.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : n.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <Info className="w-5 h-5" />}</div>
-            <span className="text-[13px] font-black tracking-tight leading-snug">{n.msg}</span>
+          <div key={i} className={`p-4 rounded-xl shadow-2xl backdrop-blur-md border animate-slide-left flex items-center gap-3 pointer-events-auto min-w-[300px] ${
+            n.type === 'success' ? 'bg-emerald-950/80 border-emerald-500/30 text-emerald-400' : 
+            n.type === 'error' ? 'bg-rose-950/80 border-rose-500/30 text-rose-400' : 
+            'bg-slate-900/80 border-slate-700 text-slate-200'
+          }`}>
+            {n.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : n.type === 'error' ? <AlertCircle className="w-5 h-5 shrink-0" /> : <Info className="w-5 h-5 shrink-0" />}
+            <span className="text-xs font-bold">{n.msg}</span>
           </div>
         ))}
       </div>
-
-      <style>{`
-        @keyframes slide-up { from { transform: translateY(30px) scale(0.95); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
-        .animate-slide-up { animation: slide-up 0.5s cubic-bezier(0.19, 1, 0.22, 1) forwards; }
-        
-        input[type=range] { -webkit-appearance: none; background: transparent; }
-        input[type=range]::-webkit-slider-thumb { 
-          -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; 
-          background: #f8fafc; cursor: pointer; border: 4px solid currentColor;
-          box-shadow: 0 0 15px rgba(0,0,0,0.5); margin-top: -6px;
-        }
-        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer; background: #1e293b; border-radius: 10px; }
-      `}</style>
     </div>
   );
 }
