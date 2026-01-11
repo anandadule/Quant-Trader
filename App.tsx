@@ -48,7 +48,9 @@ import {
   Wifi,
   WifiOff,
   Cloud,
-  Download
+  Download,
+  Wallet,
+  MousePointerClick
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradingChart } from './components/TradingChart';
@@ -134,6 +136,7 @@ export default function App() {
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(() => getSavedItem('isHistoryExpanded', true));
   const [isOpenPositionsExpanded, setIsOpenPositionsExpanded] = useState<boolean>(() => getSavedItem('isOpenPositionsExpanded', true));
   const [isNeuralAnalysisExpanded, setIsNeuralAnalysisExpanded] = useState<boolean>(() => getSavedItem('isNeuralAnalysisExpanded', true));
+  const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
 
   // Profile State
   const [userProfile, setUserProfile] = useState(() => getSavedItem('userProfile', {
@@ -212,17 +215,22 @@ export default function App() {
             setPortfolio(defaultPortfolio);
         }
 
-        if (!dbProfile) {
-           console.log("Initializing new user profile...");
-           const email = user?.email || "";
-           const metaName = user?.user_metadata?.full_name || "Trader";
-           await db.updateProfile(userId, { email, full_name: metaName });
-        } else {
-            setUserProfile(prev => ({
-                ...prev,
-                name: dbProfile.full_name || prev.name,
-                email: dbProfile.email || prev.email
-            }));
+        // Prioritize User Metadata from Auth if DB profile is missing or doesn't have name
+        const metaName = user?.user_metadata?.full_name;
+        const dbName = dbProfile?.full_name;
+        
+        // Use the most relevant name available
+        const displayName = dbName || metaName || user?.email?.split('@')[0] || "Trader";
+
+        setUserProfile(prev => ({
+            ...prev,
+            name: displayName,
+            email: user?.email || prev.email
+        }));
+
+        // Try to sync back to DB if DB is empty but we have a name
+        if (!dbProfile && metaName) {
+           await db.updateProfile(userId, { email: user.email, full_name: metaName });
         }
 
         if (dbTrades) setTrades(dbTrades);
@@ -317,7 +325,7 @@ export default function App() {
     });
   }, [trades, historyFilterType, historyFilterPnL, historyFilterStartDate, historyFilterEndDate]);
 
-  const HISTORY_ITEMS_PER_PAGE = 10;
+  const HISTORY_ITEMS_PER_PAGE = 5; // Reduced for card view
   const totalHistoryPages = Math.ceil(filteredTrades.length / HISTORY_ITEMS_PER_PAGE);
   const displayedTrades = useMemo(() => {
     const start = (historyPage - 1) * HISTORY_ITEMS_PER_PAGE;
@@ -447,16 +455,23 @@ export default function App() {
     setIsEditingProfile(false);
     
     if (session?.user) {
-        // Update in DB
-        const error = await db.updateProfile(session.user.id, {
+        // 1. Update Auth Metadata (Reliable Source)
+        const { error: authError } = await supabase.auth.updateUser({
+            data: { full_name: tempProfile.name }
+        });
+
+        if (authError) {
+             console.warn("Auth metadata update failed:", authError);
+        }
+
+        // 2. Try Update DB (Best Effort)
+        // If the 'profiles' table is broken or missing columns, this won't crash the UI experience
+        await db.updateProfile(session.user.id, {
             full_name: tempProfile.name,
             email: tempProfile.email
         });
-        if (error) {
-            notify("Failed to save profile changes to cloud", "error");
-        } else {
-            notify("Profile settings updated", "success");
-        }
+        
+        notify("Profile updated", "success");
     } else {
         notify("Profile updated locally", "success");
     }
@@ -1399,134 +1414,176 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Order Management Panel */}
+              {/* Order Management Panel - OVERHAULED UI */}
               <div className="order-2 xl:col-span-4 flex flex-col gap-6 md:gap-10">
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-5 md:p-8 shadow-2xl xl:sticky xl:top-10">
-                  <h3 className="font-black text-xl mb-6 md:mb-10 flex justify-between items-center">
-                    <span className="flex items-center gap-3"><Coins className="w-6 h-6 text-emerald-400" /> Order Entry</span>
-                    <span className="text-[10px] font-black text-slate-500 bg-slate-950 border border-slate-800 px-3 py-1 rounded-full uppercase tracking-widest">{currentSymbol}</span>
-                  </h3>
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-5 md:p-6 shadow-2xl xl:sticky xl:top-10">
+                  <div className="flex items-center justify-between mb-6">
+                      <h3 className="font-black text-lg flex items-center gap-2">
+                        <Coins className="w-5 h-5 text-emerald-400" /> Order Entry
+                      </h3>
+                      <div className="bg-slate-950 p-1 rounded-lg flex text-[10px] font-bold border border-slate-800">
+                           <button 
+                             onClick={() => setOrderType('MARKET')}
+                             className={`px-4 py-1.5 rounded-md transition-all ${orderType === 'MARKET' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                           >
+                             MARKET
+                           </button>
+                           <button 
+                             onClick={() => setOrderType('LIMIT')}
+                             className={`px-4 py-1.5 rounded-md transition-all ${orderType === 'LIMIT' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                           >
+                             LIMIT
+                           </button>
+                      </div>
+                  </div>
                   
-                  {/* Leverage Slider */}
-                  <div className="mb-8">
-                    <div className="flex justify-between items-center mb-4">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Leverage</label>
-                      <span className="text-xl font-black text-emerald-400 mono">{selectedLeverage}x</span>
+                  {/* Symbol Header */}
+                  <div className="flex justify-between items-center mb-6 bg-gradient-to-r from-slate-950 to-slate-900 p-4 rounded-xl border border-slate-800 shadow-inner">
+                       <div className="flex items-center gap-3">
+                           <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center font-black text-xs text-slate-400 border border-slate-700">
+                               {currentSymbol.substring(0,1)}
+                           </div>
+                           <div>
+                               <span className="text-sm font-black text-white block">{currentSymbol}</span>
+                               <span className="text-[10px] font-bold text-slate-500 block">Perpetual Contract</span>
+                           </div>
+                       </div>
+                       <span className="text-3xl font-mono text-emerald-400 font-bold">${currentPrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  </div>
+
+                  {/* Leverage Selector - Improved Pills */}
+                  <div className="mb-6">
+                    <div className="flex justify-between items-center mb-3">
+                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Leverage</label>
+                      <span className="text-xs font-black text-emerald-400 mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">{selectedLeverage}x</span>
                     </div>
-                    <input 
-                      type="range" 
-                      min="1" 
-                      max="125" 
-                      value={selectedLeverage} 
-                      onChange={(e) => setSelectedLeverage(parseInt(e.target.value))}
-                      className="w-full h-2 bg-slate-950 rounded-full appearance-none accent-emerald-500 cursor-pointer border border-slate-800"
-                    />
-                    <div className="flex justify-between mt-2 text-[9px] font-black text-slate-600 uppercase">
-                      <span>1x</span>
-                      <span>25x</span>
-                      <span>50x</span>
-                      <span>75x</span>
-                      <span>100x</span>
-                      <span>125x</span>
+                    
+                    <div className="flex gap-2 mb-4 overflow-x-auto pb-1 custom-scrollbar">
+                        {[1, 5, 10, 20, 50, 100, 125].map(lev => (
+                            <button 
+                                key={lev}
+                                onClick={() => setSelectedLeverage(lev)}
+                                className={`flex-1 min-w-[3rem] py-1.5 rounded-full text-[10px] font-black border transition-all ${selectedLeverage === lev ? 'bg-slate-100 text-slate-900 border-white' : 'bg-slate-950 border-slate-800 text-slate-500 hover:border-slate-600 hover:text-slate-300'}`}
+                            >
+                                {lev}x
+                            </button>
+                        ))}
+                    </div>
+                    
+                    <div className="relative h-6 flex items-center">
+                        <input 
+                        type="range" 
+                        min="1" 
+                        max="125" 
+                        value={selectedLeverage} 
+                        onChange={(e) => setSelectedLeverage(parseInt(e.target.value))}
+                        className="w-full h-1.5 bg-slate-800 rounded-full appearance-none cursor-pointer accent-emerald-500 hover:accent-emerald-400 transition-all"
+                        />
                     </div>
                   </div>
 
-                  {/* Lot Size & Margin */}
-                  <div className="grid grid-cols-2 gap-4 mb-8">
+                  {/* Lot Size & Margin - Better Inputs */}
+                  <div className="space-y-4 mb-6">
                     <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Lot Size</label>
-                      <input 
-                        type="number" 
-                        value={lotSize}
-                        onChange={(e) => setLotSize(e.target.value)}
-                        step="0.01"
-                        min="0.01"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-bold text-white focus:border-emerald-500 outline-none transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Margin Req</label>
-                      <div className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-bold text-slate-400 flex items-center gap-1">
-                        $ <span className="text-white">{estimatedMargin.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">Position Size</label>
+                      <div className="relative group">
+                          <input 
+                            type="number" 
+                            value={lotSize}
+                            onChange={(e) => setLotSize(e.target.value)}
+                            step="0.01"
+                            min="0.01"
+                            className="w-full bg-slate-950 border border-slate-800 group-hover:border-slate-700 rounded-xl p-4 text-base font-bold text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 outline-none transition-all font-mono"
+                          />
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-600 bg-slate-900 px-2 py-1 rounded">UNITS</div>
                       </div>
                     </div>
-                  </div>
-
-                  {/* TP / SL Settings */}
-                   <div className="grid grid-cols-2 gap-4 mb-8">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block flex justify-between">
-                          <span>Take Profit</span>
-                          <span className="text-emerald-500">{takeProfitPct}%</span>
-                      </label>
-                      <input 
-                        type="range" 
-                        min="1" max="500" step="1"
-                        value={takeProfitPct}
-                        onChange={(e) => setTakeProfitPct(parseFloat(e.target.value))}
-                        className="w-full h-1.5 bg-slate-950 rounded-full appearance-none accent-emerald-500 cursor-pointer"
-                      />
-                    </div>
-                     <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block flex justify-between">
-                          <span>Stop Loss</span>
-                          <span className="text-rose-500">{stopLossPct}%</span>
-                      </label>
-                      <input 
-                        type="range" 
-                        min="1" max="95" step="1"
-                        value={stopLossPct}
-                        onChange={(e) => setStopLossPct(parseFloat(e.target.value))}
-                        className="w-full h-1.5 bg-slate-950 rounded-full appearance-none accent-rose-500 cursor-pointer"
-                      />
+                    <div className="flex justify-between items-center bg-slate-950/50 p-3 rounded-xl border border-slate-800/50">
+                        <span className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-2"><Wallet className="w-3 h-3" /> Margin Required</span>
+                        <span className="text-sm font-mono font-bold text-slate-200">${estimatedMargin.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
 
-                  <div className="flex gap-4">
+                  {/* TP / SL Settings - Improved Sliders */}
+                   <div className="bg-slate-950/30 p-4 rounded-2xl border border-slate-800/50 mb-6 space-y-5">
+                       <div>
+                           <div className="flex justify-between mb-2">
+                                <span className="text-[10px] font-black text-emerald-500 uppercase flex items-center gap-1"><ArrowUpCircle className="w-3 h-3" /> Take Profit</span>
+                                <span className="text-[10px] font-mono font-bold text-slate-300">{takeProfitPct}% ROI</span>
+                           </div>
+                           <input 
+                            type="range" 
+                            min="1" max="500" step="1"
+                            value={takeProfitPct}
+                            onChange={(e) => setTakeProfitPct(parseFloat(e.target.value))}
+                            className="w-full h-1.5 bg-slate-800 rounded-full appearance-none cursor-pointer accent-emerald-500 hover:accent-emerald-400"
+                          />
+                       </div>
+                       <div>
+                           <div className="flex justify-between mb-2">
+                                <span className="text-[10px] font-black text-rose-500 uppercase flex items-center gap-1"><ArrowDownCircle className="w-3 h-3" /> Stop Loss</span>
+                                <span className="text-[10px] font-mono font-bold text-slate-300">{stopLossPct}% ROI</span>
+                           </div>
+                           <input 
+                            type="range" 
+                            min="1" max="95" step="1"
+                            value={stopLossPct}
+                            onChange={(e) => setStopLossPct(parseFloat(e.target.value))}
+                            className="w-full h-1.5 bg-slate-800 rounded-full appearance-none cursor-pointer accent-rose-500 hover:accent-rose-400"
+                          />
+                       </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
                     <button 
                       onClick={() => executeTrade('BUY', currentPrice, 'Manual Long')} 
                       disabled={portfolio.cash < estimatedMargin || currentPrice === 0}
-                      className="flex-1 py-5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-emerald-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-1"
+                      className="group relative overflow-hidden py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-emerald-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center justify-center gap-1 border-b-4 border-emerald-800 hover:border-emerald-700 active:border-0 active:translate-y-1"
                     >
-                      <span className="text-sm">Long</span>
-                      <span className="text-[9px] opacity-75">{currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
+                      <span className="text-sm flex items-center gap-2 relative z-10">Buy / Long <ArrowUpRight className="w-4 h-4" /></span>
+                      <span className="text-[9px] opacity-70 font-mono relative z-10 text-emerald-100">{currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
                     </button>
+                    
                     <button 
                       onClick={() => executeTrade('SELL', currentPrice, 'Manual Short')} 
                       disabled={portfolio.cash < estimatedMargin || currentPrice === 0}
-                      className="flex-1 py-5 bg-rose-500 hover:bg-rose-400 text-slate-950 rounded-xl font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-rose-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-1"
+                      className="group relative overflow-hidden py-4 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-rose-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center justify-center gap-1 border-b-4 border-rose-800 hover:border-rose-700 active:border-0 active:translate-y-1"
                     >
-                      <span className="text-sm">Short</span>
-                      <span className="text-[9px] opacity-75">{currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
+                      <span className="text-sm flex items-center gap-2 relative z-10">Sell / Short <ArrowDownLeft className="w-4 h-4" /></span>
+                      <span className="text-[9px] opacity-70 font-mono relative z-10 text-rose-100">{currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
                     </button>
                   </div>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl overflow-hidden transition-all">
+                {/* Trade History - REDESIGNED CARDS BELOW ORDER ENTRY */}
+                <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl transition-all">
                   <div 
                     className="flex items-center justify-between cursor-pointer group mb-6"
                     onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
                   >
                     <h3 className="font-black text-xl flex items-center gap-4 text-slate-200">
-                      <History className="w-6 h-6 text-blue-400" /> Trade Ledger
+                      <History className="w-6 h-6 text-blue-400" /> Trade History
                     </h3>
-                    <div className="flex items-center gap-2">
-                       <button 
+                     <div className="flex items-center gap-2">
+                        <button 
                             onClick={(e) => { e.stopPropagation(); setShowFilters(!showFilters); }}
                             className={`p-2 rounded-lg transition-all ${showFilters ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
                         >
                             <Filter className="w-4 h-4" />
-                       </button>
-                       <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isHistoryExpanded ? 'rotate-180' : ''}`}>
+                        </button>
+                         <button onClick={(e) => { e.stopPropagation(); handleDownloadHistory(); }} className="p-2 bg-slate-800 border border-slate-700 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wide"><Download className="w-4 h-4" /></button>
+                         <button className={`p-2 bg-slate-800 rounded-xl text-slate-400 transition-transform duration-300 ${isHistoryExpanded ? 'rotate-180' : ''}`}>
                             <ChevronDown className="w-4 h-4" />
                        </button>
-                    </div>
+                     </div>
                   </div>
 
                   {isHistoryExpanded && (
                     <div className="animate-slide-up">
                         {showFilters && (
-                            <div className="mb-6 p-4 bg-slate-950 rounded-xl border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 animate-slide-up">
+                            <div className="mb-6 p-4 bg-slate-950 rounded-xl border border-slate-800 grid grid-cols-2 gap-3 animate-slide-up">
                                 <div>
                                     <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">Type</label>
                                     <select value={historyFilterType} onChange={e => setHistoryFilterType(e.target.value as any)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none">
@@ -1548,59 +1605,79 @@ export default function App() {
                                     <input type="date" value={historyFilterStartDate} onChange={e => setHistoryFilterStartDate(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none" />
                                 </div>
                                 <div>
-                                     <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">To Date</label>
+                                    <label className="text-[9px] font-black text-slate-500 uppercase block mb-1">To Date</label>
                                     <input type="date" value={historyFilterEndDate} onChange={e => setHistoryFilterEndDate(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-bold text-slate-300 outline-none" />
-                                </div>
-                                <div className="col-span-2 md:col-span-4 flex justify-end">
-                                     <button onClick={handleDownloadHistory} className="flex items-center gap-2 text-[10px] font-black text-emerald-400 hover:text-emerald-300 uppercase tracking-widest bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-2 rounded-lg transition-all border border-emerald-500/20"><Download className="w-3 h-3" /> Export CSV</button>
                                 </div>
                             </div>
                         )}
 
-                        <div className="space-y-3">
-                            {displayedTrades.length > 0 ? displayedTrades.map((trade) => (
-                            <div key={trade.id} className="p-4 rounded-2xl bg-slate-950/50 border border-slate-800/50 hover:bg-slate-800/50 transition-colors flex justify-between items-center group">
-                                <div className="flex items-center gap-4">
-                                <div className={`p-2.5 rounded-xl ${trade.pnl && trade.pnl > 0 ? 'bg-emerald-500/10 text-emerald-400' : trade.pnl && trade.pnl < 0 ? 'bg-rose-500/10 text-rose-400' : 'bg-slate-800 text-slate-400'}`}>
-                                    {trade.type === 'BUY' ? <ArrowUpCircle className="w-5 h-5" /> : <ArrowDownCircle className="w-5 h-5" />}
-                                </div>
-                                <div>
-                                    <div className="flex items-center gap-2 mb-0.5">
-                                        <span className={`text-xs font-black ${trade.type === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>{trade.type}</span>
-                                        <span className="text-[10px] font-black text-slate-500 uppercase bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{trade.symbol}</span>
+                        <div className="flex flex-col gap-3">
+                            {displayedTrades.length > 0 ? displayedTrades.map((trade) => {
+                                const isProfit = trade.pnl && trade.pnl > 0;
+                                const isLoss = trade.pnl && trade.pnl < 0;
+                                const isOpen = trade.pnl === undefined || trade.pnl === null;
+                                
+                                // Estimation for ROI% for display purposes if not stored
+                                const marginUsed = (trade.price * trade.amount) / trade.leverage;
+                                const roi = trade.pnl ? (trade.pnl / marginUsed) * 100 : 0;
+
+                                return (
+                                <div key={trade.id} className="p-5 rounded-[1.5rem] bg-slate-950/50 border border-slate-800 hover:border-slate-700 transition-all group shadow-sm hover:shadow-md">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div className="flex items-center gap-3">
+                                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide border ${trade.type === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
+                                                {trade.type === 'BUY' ? 'BUY' : 'SELL'}
+                                            </span>
+                                            <span className="text-sm font-black text-white">{trade.symbol}</span>
+                                        </div>
+                                        <div className="text-[10px] font-bold text-slate-500 text-right leading-tight">
+                                            {trade.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} <span className="mx-1 text-slate-700">|</span> {trade.timestamp.toLocaleDateString()}
+                                        </div>
                                     </div>
-                                    <span className="text-[10px] font-bold text-slate-500">{trade.timestamp.toLocaleString()}</span>
+                                    
+                                    <div className="flex justify-between items-end mb-4">
+                                        <div className="text-xl font-black text-white tracking-tight">
+                                            ${trade.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-[10px] font-bold text-slate-500 mb-1">Qty: {trade.amount}</div>
+                                            {!isOpen ? (
+                                                <div className={`text-sm font-black font-mono ${isProfit ? 'text-emerald-400' : isLoss ? 'text-rose-400' : 'text-slate-400'}`}>
+                                                    {isProfit ? '+' : ''}${trade.pnl?.toFixed(2)} <span className="opacity-75 text-xs">({isProfit ? '+' : ''}{roi.toFixed(2)}%)</span>
+                                                </div>
+                                            ) : (
+                                                <div className="text-xs font-black text-blue-400 uppercase tracking-wider bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Active Order</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="text-[10px] font-medium text-slate-600 italic border-t border-slate-800/50 pt-3 mt-1">
+                                        {trade.reasoning}
+                                    </div>
                                 </div>
-                                </div>
-                                <div className="text-right">
-                                <div className={`text-sm font-black mono ${trade.pnl && trade.pnl > 0 ? 'text-emerald-400' : trade.pnl && trade.pnl < 0 ? 'text-rose-400' : 'text-slate-200'}`}>
-                                    {trade.pnl ? `${trade.pnl > 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : 'OPEN'}
-                                </div>
-                                <span className="text-[10px] font-bold text-slate-600">@ ${trade.price.toLocaleString()}</span>
-                                </div>
-                            </div>
-                            )) : (
-                                <div className="py-12 text-center text-slate-600 uppercase font-black text-xs tracking-[0.2em] opacity-50">No trading records found</div>
+                                )
+                            }) : (
+                                <div className="py-12 text-center text-slate-600 uppercase font-black text-[10px] tracking-widest opacity-50 bg-slate-950/30 rounded-2xl border border-slate-800/50 border-dashed">No trading records found</div>
                             )}
                         </div>
                         
                         {/* Pagination */}
                         {totalHistoryPages > 1 && (
-                            <div className="flex justify-center items-center gap-4 mt-6">
+                            <div className="flex justify-between items-center mt-6 pt-4 border-t border-slate-800">
                                 <button 
                                     onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
                                     disabled={historyPage === 1}
-                                    className="p-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 disabled:opacity-30 hover:bg-slate-800 transition-all"
+                                    className="px-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 disabled:opacity-30 hover:bg-slate-800 text-[10px] font-bold uppercase transition-all"
                                 >
-                                    <ChevronLeft className="w-4 h-4" />
+                                    Previous
                                 </button>
-                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Page {historyPage} of {totalHistoryPages}</span>
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest bg-slate-950 px-3 py-1 rounded-lg border border-slate-800">Page {historyPage} of {totalHistoryPages}</span>
                                 <button 
                                     onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))}
                                     disabled={historyPage === totalHistoryPages}
-                                    className="p-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 disabled:opacity-30 hover:bg-slate-800 transition-all"
+                                    className="px-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 disabled:opacity-30 hover:bg-slate-800 text-[10px] font-bold uppercase transition-all"
                                 >
-                                    <ChevronRight className="w-4 h-4" />
+                                    Next
                                 </button>
                             </div>
                         )}

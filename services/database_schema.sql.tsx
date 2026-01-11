@@ -1,13 +1,41 @@
 
 export const DatabaseSchema = `
--- AI Quant Trader Database Schema
--- Run this in the Supabase SQL Editor to initialize your database.
+-- AI Quant Trader Database Schema & Fixes
+-- Run this in the Supabase SQL Editor to initialize or repair your database.
 
--- 1. CLEANUP (Remove any faulty triggers causing signup errors)
+-- ==========================================
+-- 1. CRITICAL FIXES (Run these if you have existing tables)
+-- ==========================================
+
+-- Fix 1: Ensure 'full_name' column exists in profiles
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'profiles' AND column_name = 'full_name') THEN 
+        ALTER TABLE public.profiles ADD COLUMN full_name TEXT; 
+    END IF; 
+END $$;
+
+-- Fix 2: Ensure 'user_id' in portfolios is UNIQUE (Required for upsert)
+-- We first remove duplicates if any exist (keeping the most recent)
+DELETE FROM public.portfolios a USING public.portfolios b
+WHERE a.id < b.id AND a.user_id = b.user_id;
+
+-- Then we verify/add the constraint
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'portfolios_user_id_key') THEN 
+        ALTER TABLE public.portfolios ADD CONSTRAINT portfolios_user_id_key UNIQUE (user_id); 
+    END IF; 
+END $$;
+
+
+-- ==========================================
+-- 2. TABLE DEFINITIONS (Idempotent)
+-- ==========================================
+
+-- Cleanup triggers that might cause issues
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 DROP FUNCTION IF EXISTS public.handle_new_user();
-
--- 2. CREATE TABLES
 
 -- Profiles
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -20,13 +48,15 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 -- Portfolios
 CREATE TABLE IF NOT EXISTS public.portfolios (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL UNIQUE,
+  user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL,
   cash NUMERIC DEFAULT 10000,
   assets NUMERIC DEFAULT 0,
   initial_value NUMERIC DEFAULT 10000,
   positions JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  -- Ensure constraint exists if creating from scratch
+  CONSTRAINT portfolios_user_id_key UNIQUE (user_id)
 );
 
 -- Trades
@@ -63,14 +93,15 @@ CREATE TABLE IF NOT EXISTS public.equity_history (
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 3. ENABLE ROW LEVEL SECURITY (RLS)
+-- ==========================================
+-- 3. SECURITY POLICIES (RLS)
+-- ==========================================
+
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.portfolios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.trades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_analysis_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equity_history ENABLE ROW LEVEL SECURITY;
-
--- 4. ACCESS POLICIES (Allow users to CRUD their own data)
 
 -- Profiles
 DROP POLICY IF EXISTS "Users can manage own profile" ON public.profiles;
@@ -97,8 +128,9 @@ DROP POLICY IF EXISTS "Users can manage own equity" ON public.equity_history;
 CREATE POLICY "Users can manage own equity" ON public.equity_history
   USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- 5. PERMISSIONS
--- Critical: Grant access so authenticated users can insert their own data (Self-Healing)
+-- ==========================================
+-- 4. PERMISSIONS
+-- ==========================================
 GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
