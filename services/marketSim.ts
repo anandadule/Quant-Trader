@@ -1,15 +1,14 @@
+
 import { PriceData } from '../types';
 
 let currentTrend = 0;
 let volatility = 0.002;
 
+// In-memory store to maintain price consistency during simulation
+const SIMULATED_STATE: Record<string, number> = {};
+
 // Configuration for Backend Access
-// In a Vercel/Serverless environment, we simply use relative paths '/api/...'
-// The vercel.json rewrites handle directing these to the api/ folder.
 const getApiBaseUrl = () => {
-  // If we are running strictly locally with 'npm run server', we might point to 3001.
-  // However, Vite proxy is set up to forward /api to 3001 in dev.
-  // In production, /api is handled by Vercel serverless functions.
   return '/api';
 };
 
@@ -28,13 +27,18 @@ const SEED_PRICES: Record<string, number> = {
 
 // Fallback for unknown symbols to ensure the UI never breaks
 const getSeedPrice = (symbol: string): number => {
+  // If we have a running simulation state, prioritize it
+  if (SIMULATED_STATE[symbol]) return SIMULATED_STATE[symbol];
+  
   if (SEED_PRICES[symbol]) return SEED_PRICES[symbol];
+  
   // Generate a deterministic seed based on symbol string
   let hash = 0;
   for (let i = 0; i < symbol.length; i++) {
     hash = symbol.charCodeAt(i) + ((hash << 5) - hash);
   }
-  return Math.abs(hash % 5000) + 100; // Random price between 100 and 5100
+  const price = Math.abs(hash % 5000) + 100; // Random price between 100 and 5100
+  return price;
 };
 
 const calculateIndicators = (data: PriceData[]): PriceData[] => {
@@ -86,9 +90,16 @@ const formatTime = (date: Date): string => date.toLocaleTimeString([], { hour: '
 
 export const generateInitialData = (count: number = 200, symbol: string = 'BTCUSDT', timeframe: string = '1m'): PriceData[] => {
   let prevPrice = getSeedPrice(symbol);
+  
+  // Reset seed if it's a fresh generation to avoid stuck simulation
+  if (!SIMULATED_STATE[symbol] && SEED_PRICES[symbol]) {
+      prevPrice = SEED_PRICES[symbol];
+  }
+
   const data: PriceData[] = [];
   const now = Date.now();
   const step = 60000;
+  
   for (let i = count; i >= 0; i--) {
     const time = new Date(now - i * step);
     const change = (Math.random() - 0.5) * volatility;
@@ -101,6 +112,10 @@ export const generateInitialData = (count: number = 200, symbol: string = 'BTCUS
     });
     prevPrice = price;
   }
+  
+  // Sync simulation state with the latest generated price
+  SIMULATED_STATE[symbol] = prevPrice;
+  
   return calculateIndicators(data);
 };
 
@@ -122,13 +137,11 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
       const secondsPerCandle = intervalSeconds[interval] || 60;
       
       const toDate = Math.floor(Date.now() / 1000);
-      // Calculate fromDate based on number of candles (limit) * seconds per candle
       const fromDate = toDate - (limit * secondsPerCandle); 
       
       const rangeFrom = new Date(fromDate * 1000).toISOString().split('T')[0];
       const rangeTo = new Date(toDate * 1000).toISOString().split('T')[0];
       
-      // Points to /api/history which Vercel routes to api/history.js
       const url = `${API_BASE_URL}/history?symbol=${symbol}&resolution=${resVal}&date_format=1&range_from=${rangeFrom}&range_to=${rangeTo}&cont_flag=1`;
       
       const res = await fetch(url);
@@ -145,17 +158,16 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
               price: c[4],
               volume: c[5]
             }));
+            // Update simulation state with real data to keep them in sync
+            if (data.length > 0) {
+                SIMULATED_STATE[symbol] = data[data.length - 1].price;
+            }
             return calculateIndicators(data);
-          } else if (json.error) {
-             console.warn(`Backend API Error: ${json.message}`);
           }
-      } else {
-        console.warn("Backend reachable but returned error.");
       }
     } catch (e) {
       console.warn("Backend API failed, falling back to simulation.");
     }
-    // Fallback if backend is not running or keys invalid
     return generateInitialData(limit, symbol, interval);
   }
 
@@ -174,6 +186,12 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
       open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), price: parseFloat(d[4]),
       volume: parseFloat(d[5])
     }));
+    
+    // Update simulation state with real data
+    if (data.length > 0) {
+        SIMULATED_STATE[symbol] = data[data.length - 1].price;
+    }
+    
     return calculateIndicators(data);
   } catch {
     return generateInitialData(limit, symbol, interval);
@@ -181,7 +199,7 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
 };
 
 export const fetchLatestQuote = async (symbol: string, interval: string = '1m', prevData?: PriceData[]): Promise<PriceData | null> => {
-  // --- FYERS INTEGRATION (Via Backend Proxy) ---
+  // --- FYERS INTEGRATION ---
   if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
       try {
         const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
@@ -192,20 +210,21 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
                 const d = json.d[0].v;
                 const price = d.lp;
                 const now = new Date();
+                
+                SIMULATED_STATE[symbol] = price; // Sync state
+                
                 return {
                     time: formatTime(now),
                     timestamp: now.getTime() / 1000,
                     price: price,
-                    open: price, // Approximation for single tick
+                    open: price,
                     high: price,
                     low: price,
                     volume: d.volume
                 }
             }
         }
-      } catch (e) { 
-        // Backend likely offline, ignore
-      }
+      } catch (e) {}
       
       // Fallback Simulation
       if (prevData && prevData.length > 0) {
@@ -213,6 +232,9 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
         const change = (Math.random() - 0.5) * volatility;
         const close = last.price * (1 + change);
         const now = new Date();
+        
+        SIMULATED_STATE[symbol] = close; // Sync state
+        
         return {
           time: formatTime(now),
           timestamp: now.getTime() / 1000,
@@ -233,6 +255,9 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
         const last = prevData[prevData.length - 1];
         const change = (Math.random() - 0.5) * volatility;
         const close = last.price * (1 + change);
+        
+        SIMULATED_STATE[symbol] = close; // Sync state
+        
         const now = new Date();
         return {
             time: formatTime(now),
@@ -251,17 +276,21 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
     const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`);
     if (!res.ok) return null;
     const d = (await res.json())[0];
+    const price = parseFloat(d[4]);
+    
+    SIMULATED_STATE[symbol] = price; // Sync state
+    
     return {
       time: formatTime(new Date(d[0])),
       timestamp: d[0] / 1000,
-      open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), price: parseFloat(d[4]),
+      open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), price: price,
       volume: parseFloat(d[5])
     };
   } catch { return null; }
 };
 
 export const fetchTicker = async (symbol: string): Promise<{ price: number; changePercent: number } | null> => {
-  // --- FYERS INTEGRATION (Via Backend Proxy) ---
+  // --- FYERS INTEGRATION ---
   if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
      try {
          const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
@@ -270,6 +299,7 @@ export const fetchTicker = async (symbol: string): Promise<{ price: number; chan
              const json = await res.json();
              if (json.d && json.d[0]) {
                  const d = json.d[0].v;
+                 SIMULATED_STATE[symbol] = d.lp; // Sync state
                  return {
                      price: d.lp,
                      changePercent: d.chp
@@ -278,18 +308,26 @@ export const fetchTicker = async (symbol: string): Promise<{ price: number; chan
          }
      } catch (e) {}
      
-     // Fallback
+     // Fallback using State
      const base = getSeedPrice(symbol);
+     const noise = (Math.random() - 0.5) * 0.001;
+     const price = base * (1 + noise);
+     SIMULATED_STATE[symbol] = price; // Update state
+     
      return {
-        price: base * (1 + (Math.random() - 0.5) * 0.001),
+        price: price,
         changePercent: (Math.random() - 0.5) * 2
      };
   }
 
+  // --- BINANCE INTEGRATION ---
   if (!symbol.endsWith('USDT')) {
     const base = getSeedPrice(symbol);
+    const noise = (Math.random() - 0.5) * 0.001;
+    const price = base * (1 + noise);
+    SIMULATED_STATE[symbol] = price; // Update state
     return {
-      price: base * (1 + (Math.random() - 0.5) * 0.001),
+      price: price,
       changePercent: (Math.random() - 0.5) * 2
     };
   }
@@ -298,14 +336,20 @@ export const fetchTicker = async (symbol: string): Promise<{ price: number; chan
     const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
     if (!res.ok) throw new Error();
     const data = await res.json();
+    const price = parseFloat(data.lastPrice);
+    SIMULATED_STATE[symbol] = price; // Sync state
     return {
-      price: parseFloat(data.lastPrice),
+      price: price,
       changePercent: parseFloat(data.priceChangePercent)
     };
   } catch {
+    // Fallback using State
     const base = getSeedPrice(symbol);
+    const noise = (Math.random() - 0.5) * 0.001;
+    const price = base * (1 + noise);
+    SIMULATED_STATE[symbol] = price; // Update state
     return {
-      price: base * (1 + (Math.random() - 0.5) * 0.001),
+      price: price,
       changePercent: (Math.random() - 0.5) * 2
     };
   }

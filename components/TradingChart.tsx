@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { BarChart3, ChevronDown, Maximize, Minimize, PenTool, ZoomIn, ZoomOut } from 'lucide-react';
 import { Strategy } from '../types';
@@ -36,12 +37,13 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   availablePairs,
   activeStrategy
 }) => {
-  const containerId = 'tradingview_widget_container';
+  // Use a stable unique ID for the container to avoid React reconciliation issues
+  const containerId = useRef(`tv_chart_${Math.random().toString(36).substring(7)}`).current;
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showToolbar, setShowToolbar] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const widgetContainerRef = useRef<HTMLDivElement>(null);
 
   const currentSymbolName = availablePairs.find(p => p.symbol === currentSymbol)?.name || currentSymbol;
 
@@ -71,13 +73,11 @@ export const TradingChart: React.FC<TradingChartProps> = ({
           'RSI@tv-basicstudies'
         ];
       case Strategy.SMA_CROSSOVER:
-        // Attempt to pass configuration for 10 and 20 SMA
         return [
           { id: 'MASimple@tv-basicstudies', inputs: { length: 10 } },
           { id: 'MASimple@tv-basicstudies', inputs: { length: 20 } }
         ];
       case Strategy.EMA_CROSSOVER:
-        // Attempt to pass configuration for 9 and 20 EMA
         return [
           { id: 'MAExp@tv-basicstudies', inputs: { length: 9 } },
           { id: 'MAExp@tv-basicstudies', inputs: { length: 20 } }
@@ -121,38 +121,64 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   }, []);
 
   useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.innerHTML = `<div id="${containerId}" style="height: 100%; width: 100%;"></div>`;
+    // 1. Check if script exists, if not inject it
+    if (!document.querySelector('#tradingview-widget-script')) {
+        const script = document.createElement('script');
+        script.id = 'tradingview-widget-script';
+        script.src = 'https://s3.tradingview.com/tv.js';
+        script.async = true;
+        document.head.appendChild(script);
     }
 
-    if (window.TradingView) {
-      const disabledFeatures = [
-        'header_symbol_search',
-        'header_compare',
-        'header_screenshot',
-        'header_saveload'
-      ];
+    const initChart = () => {
+        if (window.TradingView && widgetContainerRef.current) {
+            // Check if the container actually exists in DOM before init
+            const containerElement = document.getElementById(containerId);
+            if (!containerElement) return;
 
-      new window.TradingView.widget({
-        autosize: true,
-        symbol: getFullSymbol(currentSymbol),
-        interval: TIMEFRAME_MAP[timeframe] || '1',
-        timezone: 'Etc/UTC',
-        theme: 'dark',
-        style: '1',
-        locale: 'en',
-        toolbar_bg: '#0f172a',
-        enable_publishing: false,
-        hide_side_toolbar: !showToolbar,
-        allow_symbol_change: false, // Dropdown handles this
-        container_id: containerId,
-        backgroundColor: '#0f172a',
-        gridColor: 'rgba(30, 41, 59, 0.1)',
-        studies: getStudies(),
-        disabled_features: disabledFeatures,
-      });
+            // Safe cleanup
+            widgetContainerRef.current.innerHTML = '';
+
+            new window.TradingView.widget({
+                autosize: true,
+                symbol: getFullSymbol(currentSymbol),
+                interval: TIMEFRAME_MAP[timeframe] || '1',
+                timezone: 'Etc/UTC',
+                theme: 'dark',
+                style: '1',
+                locale: 'en',
+                toolbar_bg: '#0f172a',
+                enable_publishing: false,
+                hide_side_toolbar: !showToolbar,
+                allow_symbol_change: false, 
+                container_id: containerId,
+                backgroundColor: '#0f172a',
+                gridColor: 'rgba(30, 41, 59, 0.1)',
+                studies: getStudies(),
+                disabled_features: [
+                    'header_symbol_search',
+                    'header_compare',
+                    'header_screenshot',
+                    'header_saveload'
+                ],
+            });
+        }
+    };
+
+    // 2. Wait for script load
+    if (!window.TradingView) {
+        const timer = setInterval(() => {
+            if (window.TradingView) {
+                clearInterval(timer);
+                initChart();
+            }
+        }, 300);
+        return () => clearInterval(timer);
+    } else {
+        // Add a small delay to ensure DOM paint
+        setTimeout(initChart, 100);
     }
-  }, [currentSymbol, timeframe, showToolbar, activeStrategy]);
+  }, [currentSymbol, timeframe, showToolbar, activeStrategy, containerId]);
 
   return (
     <div 
@@ -242,9 +268,11 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         </div>
       </div>
 
-      <div className="flex-1 w-full relative min-h-[350px]" ref={containerRef}>
-        <div id={containerId} className="absolute inset-0 w-full h-full rounded-xl overflow-hidden border border-slate-800 bg-slate-950 shadow-inner" />
-        <div className="absolute bottom-0 left-0 w-40 h-10 bg-[#0f172a] z-50 pointer-events-auto rounded-bl-xl" />
+      <div className="flex-1 w-full relative min-h-[350px]">
+        {/* Added explicit height and text for debugging visual */}
+        <div id={containerId} ref={widgetContainerRef} className="absolute inset-0 w-full h-full rounded-xl overflow-hidden border border-slate-800 bg-slate-950 shadow-inner flex items-center justify-center text-slate-600 text-xs font-mono">
+            Initializing Chart...
+        </div>
       </div>
     </div>
   );

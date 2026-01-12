@@ -7,7 +7,18 @@ import { PriceData, AIAnalysis, GroundingSource } from "../types";
  * Uses Gemini 3 Flash to interpret actual chart data and indicators.
  */
 export const analyzeMarket = async (data: PriceData[], symbol: string = 'BTCUSDT'): Promise<AIAnalysis> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+      console.warn("API Key missing for Gemini Analysis");
+      return { 
+          action: 'HOLD', 
+          confidence: 0, 
+          reasoning: "API Key missing. Cannot perform AI analysis.", 
+          sources: [] 
+      };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   
   // Extract key metrics for the prompt
   const latest = data[data.length - 1];
@@ -31,8 +42,7 @@ export const analyzeMarket = async (data: PriceData[], symbol: string = 'BTCUSDT
     1. Identify the primary trend (Bullish/Bearish/Neutral).
     2. Look for RSI divergences or exhaustion levels.
     3. Check SMA crossovers (Golden/Death cross).
-    4. Use Google Search to find any breaking news or sentiment shifts for ${symbol} that might invalidate technicals.
-    5. Provide a clear BUY, SELL, or HOLD recommendation.
+    4. Provide a clear BUY, SELL, or HOLD recommendation.
 
     OUTPUT FORMAT:
     Respond with a raw JSON object (no markdown formatting, no code blocks).
@@ -44,16 +54,47 @@ export const analyzeMarket = async (data: PriceData[], symbol: string = 'BTCUSDT
     }
   `;
 
-  try {
-    const response = await ai.models.generateContent({
+  // Helper function to handle API calls with optional tools
+  const callModel = async (useSearch: boolean) => {
+    const config: any = {
+        systemInstruction: "You are a professional Quant Trading Bot. You provide high-probability signals based on technical analysis and real-time market news.",
+    };
+    
+    // Only add tools if explicitly requested and presumed available
+    if (useSearch) {
+        config.tools = [{ googleSearch: {} }];
+    }
+
+    return await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
-      config: {
-        systemInstruction: "You are a professional Quant Trading Bot. You provide high-probability signals based on technical analysis and real-time market news.",
-        tools: [{ googleSearch: {} }],
-        // responseSchema and responseMimeType removed to prevent conflict with Google Search tool which was causing 500 errors
-      }
+      config: config
     });
+  };
+
+  try {
+    let response;
+    
+    try {
+        // Attempt 1: Try with Google Search Grounding
+        response = await callModel(true);
+    } catch (e: any) {
+        // Check for 403 Permission Denied or other tool-related errors
+        // Some keys do not have access to Dynamic Retrieval (Search)
+        const isPermissionError = 
+            (e.status === 403) || 
+            (e.message && e.message.includes('403')) || 
+            (e.toString().includes('403')) ||
+            (e.message && e.message.includes('PERMISSION_DENIED'));
+
+        if (isPermissionError) {
+            console.warn("Gemini Search Tool Access Denied (403). Retrying with pure technical analysis...");
+            // Attempt 2: Fallback to pure technical analysis without tools
+            response = await callModel(false);
+        } else {
+            throw e; // Re-throw if it's a different error
+        }
+    }
 
     let text = response.text || "{}";
     // Clean markdown code blocks if present

@@ -1,4 +1,3 @@
-
 import { supabase } from './supabaseClient';
 import { Portfolio, Trade, AIAnalysis, Position } from '../types';
 
@@ -14,7 +13,10 @@ export const db = {
       .maybeSingle();
       
     if (error) {
-      console.error('Error fetching profile:', error.message);
+      // Suppress network errors for profile fetch, just return null
+      if (!error.message.includes('Failed to fetch')) {
+          console.error('Error fetching profile:', error.message);
+      }
       return null;
     }
     return data;
@@ -39,8 +41,13 @@ export const db = {
         console.warn('DB Profile Update Warning:', error.message);
         return error;
       }
-    } catch (e) {
-      console.warn('DB Profile Update Failed (Schema mismatch?):', e);
+    } catch (e: any) {
+       // Graceful fallback
+       if (e.message && e.message.includes('Failed to fetch')) {
+           console.warn("Profile update skipped (Offline Mode)");
+       } else {
+           console.warn('DB Profile Update Failed:', e);
+       }
     }
     return null;
   },
@@ -57,7 +64,9 @@ export const db = {
       .maybeSingle();
 
     if (error) {
-      console.error('Error fetching portfolio:', error.message);
+      if (!error.message.includes('Failed to fetch')) {
+          console.error('Error fetching portfolio:', error.message);
+      }
       return null;
     }
     
@@ -77,74 +86,86 @@ export const db = {
 
   /**
    * Create or Update the user's portfolio
-   * USES MANUAL CHECK-THEN-WRITE to avoid "no unique constraint" errors (42P10)
+   * Uses Select -> Update/Insert pattern for maximum robustness against schema constraint variations
    */
   async upsertPortfolio(userId: string, portfolio: Portfolio) {
     // 1. Sanitize Data: Ensure positions is an array
     const positions = Array.isArray(portfolio.positions) ? portfolio.positions : [];
+
+    // Helper to ensure numbers are finite and safe for Postgres numeric types
+    const safeNum = (val: any) => {
+        const n = Number(val);
+        return Number.isFinite(n) ? n : 0;
+    };
 
     // 2. Map and Validate: Ensure no undefined/NaN values pass to the DB
     const cleanPositions = positions.map(p => ({
         id: p.id || Math.random().toString(36).substr(2, 9),
         symbol: p.symbol || 'UNKNOWN',
         type: p.type || 'LONG',
-        entryPrice: Number(p.entryPrice) || 0,
-        amount: Number(p.amount) || 0,
-        leverage: Number(p.leverage) || 1,
-        timestamp: Number(p.timestamp) || Date.now(),
-        stopLossPct: Number(p.stopLossPct || 0),
-        takeProfitPct: Number(p.takeProfitPct || 0)
+        entryPrice: safeNum(p.entryPrice),
+        amount: safeNum(p.amount),
+        leverage: safeNum(p.leverage) || 1,
+        timestamp: safeNum(p.timestamp) || Date.now(),
+        stopLossPct: safeNum(p.stopLossPct),
+        takeProfitPct: safeNum(p.takeProfitPct)
     }));
 
     const payload = {
-        cash: Number(portfolio.cash) || 0,
-        assets: Number(portfolio.assets) || 0,
-        initial_value: Number(portfolio.initialValue) || 0,
+        user_id: userId, // Required for matching
+        cash: safeNum(portfolio.cash),
+        assets: safeNum(portfolio.assets),
+        initial_value: safeNum(portfolio.initialValue),
         positions: cleanPositions as any,
         updated_at: new Date().toISOString()
     };
 
     try {
-        // 3. Check if portfolio exists for this user
+        // Strategy: Check existence first.
+        // This avoids issues where 'upsert' fails because the unique constraint on user_id might be missing or named differently.
         const { data: existing, error: fetchError } = await supabase
             .from('portfolios')
             .select('id')
             .eq('user_id', userId)
             .maybeSingle();
 
-        if (fetchError) throw fetchError;
+        if (fetchError && !fetchError.message.includes('Failed to fetch')) {
+             console.warn("Error checking portfolio existence:", fetchError.message);
+        }
 
         let error;
 
         if (existing) {
-            // UPDATE
-            const { error: updateError } = await supabase
+            // Update existing record
+            const res = await supabase
                 .from('portfolios')
                 .update(payload)
                 .eq('user_id', userId);
-            error = updateError;
+            error = res.error;
         } else {
-            // INSERT
-            const { error: insertError } = await supabase
+            // Insert new record
+            const res = await supabase
                 .from('portfolios')
-                .insert({
-                    user_id: userId,
-                    ...payload
-                });
-            error = insertError;
+                .insert(payload);
+            error = res.error;
         }
 
-        // 4. Improved Error Logging
         if (error) {
-            console.error('Error saving portfolio:', {
-                message: error.message,
-                details: error.details,
-                hint: error.hint,
-                code: error.code
-            });
+            // Check specifically for fetch errors (Offline/Network issues)
+            if (error.message && error.message.includes('Failed to fetch')) {
+                 console.warn("Database sync failed (Network/Offline). Continuing in local mode.");
+                 return;
+            }
+            
+            // Log full stringified error to debug [object Object] issues
+            console.error('Error saving portfolio:', JSON.stringify(error, null, 2));
         }
     } catch (e: any) {
-        console.error("Critical Portfolio Save Error:", e.message);
+        if (e.message && e.message.includes('Failed to fetch')) {
+            console.warn("Database sync failed (Network/Offline). Continuing in local mode.");
+        } else {
+            console.error("Critical Portfolio Save Error:", e);
+        }
     }
   },
 
@@ -152,21 +173,32 @@ export const db = {
    * Log a new trade
    */
   async logTrade(userId: string, trade: Trade) {
-    const { error } = await supabase
-      .from('trades')
-      .insert({
-        user_id: userId,
-        symbol: trade.symbol,
-        type: trade.type,
-        price: trade.price,
-        amount: trade.amount,
-        leverage: trade.leverage,
-        pnl: trade.pnl,
-        reasoning: trade.reasoning,
-        timestamp: trade.timestamp.toISOString()
-      });
+    try {
+        // Safe Number conversion
+        const safeNum = (val: any) => Number.isFinite(Number(val)) ? Number(val) : 0;
 
-    if (error) console.error('Error logging trade:', error.message);
+        const { error } = await supabase
+        .from('trades')
+        .insert({
+            user_id: userId,
+            symbol: trade.symbol,
+            type: trade.type,
+            price: safeNum(trade.price),
+            amount: safeNum(trade.amount),
+            leverage: safeNum(trade.leverage),
+            pnl: (trade.pnl !== undefined && trade.pnl !== null) ? safeNum(trade.pnl) : null,
+            reasoning: trade.reasoning,
+            timestamp: trade.timestamp.toISOString()
+        });
+
+        if (error) {
+            if (!error.message.includes('Failed to fetch')) {
+                console.error('Error logging trade:', error.message);
+            }
+        }
+    } catch (e) {
+        // Ignore network errors for logging
+    }
   },
 
   /**
@@ -180,7 +212,9 @@ export const db = {
       .order('timestamp', { ascending: false });
     
     if (error) {
-      console.error('Error fetching trades:', error.message);
+      if (!error.message.includes('Failed to fetch')) {
+          console.error('Error fetching trades:', error.message);
+      }
       return [];
     }
     
@@ -202,16 +236,22 @@ export const db = {
    * Log AI Analysis for transparency
    */
   async logAnalysis(userId: string, analysis: AIAnalysis, symbol: string) {
-     const { error } = await supabase
-      .from('ai_analysis_logs')
-      .insert({
-         user_id: userId,
-         symbol: symbol,
-         action: analysis.action,
-         confidence: analysis.confidence,
-         reasoning: analysis.reasoning,
-         strategy_used: analysis.strategyUsed
-      });
-      if (error) console.error('Error logging analysis:', error.message);
+     try {
+         const { error } = await supabase
+          .from('ai_analysis_logs')
+          .insert({
+             user_id: userId,
+             symbol: symbol,
+             action: analysis.action,
+             confidence: analysis.confidence,
+             reasoning: analysis.reasoning,
+             strategy_used: analysis.strategyUsed
+          });
+          if (error && !error.message.includes('Failed to fetch')) {
+              console.error('Error logging analysis:', error.message);
+          }
+     } catch(e) {
+         // Ignore logging errors
+     }
   }
 };

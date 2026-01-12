@@ -1154,7 +1154,14 @@ export default function App() {
       <main className="flex-1 bg-slate-950 p-3 md:p-6 lg:p-8 overflow-y-auto min-h-screen relative">
         {view === 'dashboard' ? (
           <>
-            <div className="absolute top-6 right-6 lg:right-8 z-10 hidden md:block">
+            {/* Top Right User Info & Settings */}
+            <div className="absolute top-6 right-6 lg:right-8 z-10 hidden md:flex items-center gap-4">
+              <div className="flex items-center gap-3 px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl shadow-lg">
+                 <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
+                    <User className="w-3.5 h-3.5" />
+                 </div>
+                 <span className="text-xs font-bold text-slate-300">{userProfile.name}</span>
+              </div>
               <button onClick={() => setView('settings')} className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-all shadow-lg active:scale-95">
                 <Settings className="w-5 h-5" />
               </button>
@@ -1175,10 +1182,6 @@ export default function App() {
                             <span>DATA FEED: SIMULATED</span>
                         </div>
                    )}
-                   <div className="inline-flex items-center gap-3 text-[10px] font-black px-4 py-2 rounded-xl border border-slate-800/50 text-slate-400 bg-slate-900/50">
-                        <Activity className="w-3 h-3" />
-                        <span>EXECUTION: PAPER/SIM</span>
-                   </div>
                    <div className="inline-flex items-center gap-3 text-[10px] font-black px-4 py-2 rounded-xl border border-blue-500/20 text-blue-400 bg-blue-500/5">
                         <Cloud className="w-3 h-3" />
                         <span>CLOUD SYNC: ACTIVE</span>
