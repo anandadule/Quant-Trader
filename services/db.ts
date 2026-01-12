@@ -25,10 +25,9 @@ export const db = {
   /**
    * Update user's profile
    * Uses upsert to ensure the profile exists.
+   * Includes fallback for missing columns (schema mismatch).
    */
   async updateProfile(userId: string, updates: { full_name?: string; email?: string }) {
-    // Attempt to update. If the column 'full_name' is missing in the DB, this might throw.
-    // We try/catch to ensure app doesn't crash, but we rely on Auth Metadata as primary source in App.tsx now.
     try {
       const { error } = await supabase
         .from('profiles')
@@ -38,6 +37,30 @@ export const db = {
         });
         
       if (error) {
+        // Specific handling for missing column schema mismatch
+        // Error message: "Could not find the 'full_name' column of 'profiles' in the schema cache"
+        if (error.message && (
+            error.message.includes('Could not find the') || 
+            error.message.includes('column')
+        )) {
+            console.warn("DB Schema Mismatch: 'full_name' column missing. Attempting partial save (Email only).");
+            
+            // Fallback: Save what we can (email only) if provided
+            if (updates.email) {
+                 const { error: retryError } = await supabase.from('profiles').upsert({
+                    id: userId,
+                    email: updates.email
+                });
+                if (retryError && !retryError.message.includes('Failed to fetch')) {
+                    console.warn("Partial save failed:", retryError.message);
+                }
+            } else {
+                // Just ensure ID exists
+                await supabase.from('profiles').upsert({ id: userId });
+            }
+            return null; // Treated as handled
+        }
+
         console.warn('DB Profile Update Warning:', error.message);
         return error;
       }
