@@ -621,9 +621,58 @@ export default function App() {
   }, [priceMap, notify, portfolio, session]);
 
   // Close All Positions
-  const handleExitAll = useCallback(() => {
-    (portfolio.positions || []).forEach(pos => handleClosePosition(pos.id));
-  }, [portfolio.positions, handleClosePosition]);
+  const handleExitAll = useCallback(async () => {
+    const positions = portfolio.positions || [];
+    if (positions.length === 0) return;
+
+    let totalPnl = 0;
+    let totalMarginReleased = 0;
+    const closingTrades: Trade[] = [];
+
+    // Calculate totals and generate trades
+    positions.forEach(pos => {
+        const closePrice = priceMap[pos.symbol] || pos.entryPrice;
+        const diff = closePrice - pos.entryPrice;
+        const pnl = diff * pos.amount * (pos.type === 'LONG' ? 1 : -1);
+        const marginReleased = (pos.entryPrice * pos.amount) / pos.leverage;
+
+        totalPnl += pnl;
+        totalMarginReleased += marginReleased;
+
+        closingTrades.push({
+            id: Math.random().toString(36).substr(2, 9),
+            type: pos.type === 'LONG' ? 'SELL' : 'BUY',
+            price: closePrice,
+            amount: pos.amount,
+            leverage: pos.leverage,
+            timestamp: new Date(),
+            reasoning: `Mass Exit ${pos.symbol}`,
+            pnl: pnl,
+            symbol: pos.symbol
+        });
+    });
+
+    const newPortfolio = {
+        ...portfolio,
+        cash: portfolio.cash + totalMarginReleased + totalPnl,
+        positions: [] // Clear all
+    };
+
+    // Update State
+    setTrades(prev => [...closingTrades, ...prev]);
+    setPortfolio(newPortfolio);
+
+    // Sync DB
+    if (session?.user) {
+        await db.upsertPortfolio(session.user.id, newPortfolio);
+        // Log trades sequentially
+        for (const trade of closingTrades) {
+             await db.logTrade(session.user.id, trade);
+        }
+    }
+
+    notify(`Closed ${positions.length} positions. Total PnL: $${totalPnl.toFixed(2)}`, totalPnl >= 0 ? 'success' : 'info');
+  }, [portfolio, priceMap, session, notify]);
 
   // Risk Management / Auto Close
   useEffect(() => {
