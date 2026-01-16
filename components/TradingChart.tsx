@@ -161,6 +161,9 @@ export const TradingChart: React.FC<TradingChartProps> = ({
                     'header_screenshot',
                     'header_saveload'
                 ],
+                overrides: {
+                    "mainSeriesProperties.showCountdown": true
+                }
             });
         }
     };

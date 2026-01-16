@@ -52,7 +52,7 @@ import {
   Wallet,
   MousePointerClick
 } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { TradingChart } from './components/TradingChart';
 import { Auth } from './components/Auth';
 import { PriceData, Trade, Portfolio, TradingMode, AIAnalysis, EquityPoint, WatchlistItem, Strategy, Position } from './types';
@@ -484,12 +484,21 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [notifications]);
 
+  // Use a ref to track equity without triggering effect re-renders
+  const equityRef = useRef(equity);
+  useEffect(() => { equityRef.current = equity; }, [equity]);
+
   useEffect(() => {
+    // Seed data if empty
+    if (equityHistory.length === 0) {
+        setEquityHistory([{ timestamp: Date.now(), equity: INITIAL_CASH }]);
+    }
+
     const timer = setInterval(() => {
-      setEquityHistory(prev => [...prev, { timestamp: Date.now(), equity: parseFloat(equity.toFixed(2)) }].slice(-100));
+      setEquityHistory(prev => [...prev, { timestamp: Date.now(), equity: parseFloat(equityRef.current.toFixed(2)) }].slice(-100));
     }, 2000); 
     return () => clearInterval(timer);
-  }, [equity]);
+  }, []);
 
   useEffect(() => {
     const updateWatch = async () => {
@@ -658,16 +667,20 @@ export default function App() {
         positions: [] // Clear all
     };
 
-    // Update State
+    // Update State Atomically
     setTrades(prev => [...closingTrades, ...prev]);
     setPortfolio(newPortfolio);
 
     // Sync DB
     if (session?.user) {
-        await db.upsertPortfolio(session.user.id, newPortfolio);
-        // Log trades sequentially
-        for (const trade of closingTrades) {
-             await db.logTrade(session.user.id, trade);
+        try {
+            await db.upsertPortfolio(session.user.id, newPortfolio);
+            // Log trades sequentially
+            for (const trade of closingTrades) {
+                 await db.logTrade(session.user.id, trade);
+            }
+        } catch (e) {
+            console.error("Error syncing mass exit to DB", e);
         }
     }
 
@@ -1268,18 +1281,6 @@ export default function App() {
               </div>
             </header>
 
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 mb-8 md:mb-12">
-              <div className="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl flex flex-col gap-6">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase flex items-center gap-3"><PieChart className="w-4 h-4" /> Operations Audit</h3>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-1">
-                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Alpha Win Rate</span><div className="text-lg md:text-2xl font-black text-emerald-400">{stats.winRate.toFixed(1)}%</div></div>
-                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Total Ops</span><div className="text-lg md:text-2xl font-black text-blue-400">{stats.total}</div></div>
-                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Drawdown</span><div className="text-lg md:text-2xl font-black text-rose-400">0.00%</div></div>
-                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Risk Rating</span><div className="text-lg md:text-2xl font-black text-slate-200">Tier 1</div></div>
-                </div>
-              </div>
-            </div>
-
             <div className="flex flex-col xl:grid xl:grid-cols-12 gap-6 md:gap-10 mb-12">
               <div className="order-1 xl:col-span-8 flex flex-col gap-6 md:gap-10">
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-4 md:p-8 shadow-2xl flex flex-col transition-all h-[450px] md:h-[600px] lg:h-[700px]">
@@ -1735,6 +1736,68 @@ export default function App() {
                         )}
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+
+            {/* Operations Audit - MOVED TO BOTTOM */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 mb-8 md:mb-12">
+              <div className="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-[2.5rem] p-6 md:p-8 shadow-2xl flex flex-col gap-6">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase flex items-center gap-3"><PieChart className="w-4 h-4" /> Operations Audit</h3>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-1">
+                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Alpha Win Rate</span><div className="text-lg md:text-2xl font-black text-emerald-400">{stats.winRate.toFixed(1)}%</div></div>
+                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Total Ops</span><div className="text-lg md:text-2xl font-black text-blue-400">{stats.total}</div></div>
+                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Drawdown</span><div className="text-lg md:text-2xl font-black text-rose-400">0.00%</div></div>
+                  <div className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-800/50"><span className="text-[10px] font-black text-slate-600 uppercase mb-1 block">Risk Rating</span><div className="text-lg md:text-2xl font-black text-slate-200">Tier 1</div></div>
+                </div>
+
+                {/* Equity Curve Chart - RESTORED AT BOTTOM FOOTER AREA */}
+                <div className="h-[300px] w-full mt-2 bg-slate-950/50 rounded-2xl border border-slate-800/50 p-4 relative overflow-hidden">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={equityHistory}>
+                        <defs>
+                            <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                            </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                        <XAxis 
+                            dataKey="timestamp" 
+                            tickFormatter={(tick) => new Date(tick).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            stroke="#334155" 
+                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }}
+                            axisLine={false}
+                            tickLine={false}
+                            minTickGap={30}
+                        />
+                        <YAxis 
+                            domain={['auto', 'auto']}
+                            tickFormatter={(val) => `$${val.toLocaleString()}`}
+                            stroke="#334155" 
+                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700, fontFamily: 'monospace' }}
+                            axisLine={false}
+                            tickLine={false}
+                            width={60}
+                        />
+                        <Tooltip 
+                            contentStyle={{ backgroundColor: '#020617', borderColor: '#1e293b', borderRadius: '0.75rem' }}
+                            itemStyle={{ color: '#10b981', fontWeight: 'bold', fontFamily: 'monospace' }}
+                            labelStyle={{ color: '#94a3b8', fontSize: '10px', marginBottom: '4px' }}
+                            labelFormatter={(label) => new Date(label).toLocaleString()}
+                            formatter={(value: number) => [`$${value.toFixed(2)}`, 'Equity']}
+                        />
+                        <Area 
+                            type="monotone" 
+                            dataKey="equity" 
+                            stroke="#10b981" 
+                            strokeWidth={3}
+                            fillOpacity={1} 
+                            fill="url(#colorEquity)" 
+                            isAnimationActive={false}
+                        />
+                        </AreaChart>
+                    </ResponsiveContainer>
                 </div>
               </div>
             </div>
