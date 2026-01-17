@@ -1,3 +1,4 @@
+
 /**
  * Node.js Backend Proxy for Gemini Quant
  * 
@@ -42,7 +43,7 @@ const requireAuth = (req, res, next) => {
 // When you log in via Fyers, it redirects here.
 app.get('/', (req, res) => {
     res.send(`
-        <h1>Gemini Quant Backend is Online 🟢</h1>
+        <h1>ProTrader Quant Backend is Online 🟢</h1>
         <p>If you were redirected here from Fyers, your Redirect URL configuration is correct.</p>
         <p>Please ensure your <code>.env</code> file is updated with your Access Token.</p>
     `);
@@ -105,7 +106,7 @@ app.get('/api/quotes', requireAuth, async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`\n🚀 Gemini Quant Backend running on http://localhost:${PORT}`);
+    console.log(`\n🚀 ProTrader Quant Backend running on http://localhost:${PORT}`);
     console.log(`👉 Use this as Redirect URL: http://localhost:${PORT}/`);
     
     if (FYERS_APP_ID && FYERS_ACCESS_TOKEN) {

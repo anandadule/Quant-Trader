@@ -67,7 +67,7 @@ import { supabase } from './services/supabaseClient';
 import { db } from './services/db';
 
 const INITIAL_CASH = 10000;
-const STORAGE_KEY = 'gemini_quant_pro_v12_multi_pos';
+const STORAGE_KEY = 'protrader_quant_v1_multi_pos';
 
 const AVAILABLE_PAIRS = [
   { symbol: 'BTCUSDT', name: 'BTC/USD' },
@@ -774,7 +774,7 @@ export default function App() {
 
   const getStrategyName = (s: Strategy) => {
     switch(s) {
-      case Strategy.AI_GEMINI: return "Gemini Ultra";
+      case Strategy.AI_GEMINI: return "ProTrader Ultra";
       case Strategy.RSI_MOMENTUM: return "RSI Momentum";
       case Strategy.SMA_CROSSOVER: return "SMA Crossover";
       case Strategy.EMA_CROSSOVER: return "9/20 EMA";
@@ -892,7 +892,7 @@ export default function App() {
              <div className="p-8 border-b border-slate-800">
                 <div className="flex items-center gap-4">
                     <div className="p-3 bg-emerald-500 rounded-2xl shadow-lg shadow-emerald-500/20"><TrendingUp className="w-8 h-8 text-slate-950" /></div>
-                    <div><h1 className="text-2xl font-black tracking-tighter">Gemini<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Public Data Feed</span></div>
+                    <div><h1 className="text-2xl font-black tracking-tighter">ProTrader<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Public Data Feed</span></div>
                 </div>
              </div>
              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
@@ -1150,7 +1150,7 @@ export default function App() {
 
       {/* Mobile Header */}
       <div className="md:hidden flex items-center justify-between p-4 bg-slate-900 border-b border-slate-800 sticky top-0 z-[100]">
-        <div className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-400" /><h1 className="text-sm font-black tracking-tighter">Gemini<span className="text-emerald-400">Quant</span></h1></div>
+        <div className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-400" /><h1 className="text-sm font-black tracking-tighter">ProTrader<span className="text-emerald-400">Quant</span></h1></div>
         <div className="flex items-center gap-3">
           <button onClick={() => setView('settings')} className="p-2 bg-slate-800 rounded-lg text-slate-400"><Settings className="w-5 h-5" /></button>
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-800 rounded-lg">{isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}</button>
@@ -1162,7 +1162,7 @@ export default function App() {
         <div className="p-6 border-b border-slate-800 hidden md:block">
           <div className="flex items-center gap-4">
             <div className="p-3 bg-emerald-500 rounded-2xl"><TrendingUp className="w-8 h-8 text-slate-950" /></div>
-            <div><h1 className="text-2xl font-black tracking-tighter">Gemini<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Alpha v11.0</span></div>
+            <div><h1 className="text-2xl font-black tracking-tighter">ProTrader<span className="text-emerald-400">Quant</span></h1><span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Alpha v11.0</span></div>
           </div>
         </div>
 
