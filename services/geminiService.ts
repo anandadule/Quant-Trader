@@ -128,12 +128,21 @@ export const analyzeMarket = async (data: PriceData[], symbol: string = 'BTCUSDT
         { title: "Live Market Data", uri: `https://www.tradingview.com/symbols/${symbol}/` }
       ]
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
+    
+    // Improved error message extraction
+    let errorMsg = "Service unavailable.";
+    if (error.message) errorMsg = error.message;
+    else if (error.toString()) errorMsg = error.toString();
+    
+    // Shorten extremely long error messages
+    if (errorMsg.length > 100) errorMsg = errorMsg.substring(0, 100) + "...";
+
     return {
       action: 'HOLD',
       confidence: 0,
-      reasoning: "AI analysis service error. Reverting to manual monitoring.",
+      reasoning: `AI Error: ${errorMsg}. Reverting to manual monitoring.`,
       sources: []
     };
   }
