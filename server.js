@@ -17,7 +17,8 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-const PORT = 3001;
+// Use the PORT provided by the hosting environment, or default to 3001 for local dev
+const PORT = process.env.PORT || 3001;
 
 // Load keys from .env
 const FYERS_APP_ID = process.env.FYERS_APP_ID; 
@@ -106,8 +107,7 @@ app.get('/api/quotes', requireAuth, async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`\n🚀 ProTrader Quant Backend running on http://localhost:${PORT}`);
-    console.log(`👉 Use this as Redirect URL: http://localhost:${PORT}/`);
+    console.log(`\n🚀 ProTrader Quant Backend running on port ${PORT}`);
     
     if (FYERS_APP_ID && FYERS_ACCESS_TOKEN) {
         console.log("✅ API Credentials Loaded");

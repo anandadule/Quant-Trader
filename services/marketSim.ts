@@ -1,4 +1,3 @@
-
 import { PriceData } from '../types';
 
 let currentTrend = 0;
@@ -9,7 +8,19 @@ const SIMULATED_STATE: Record<string, number> = {};
 
 // Configuration for Backend Access
 const getApiBaseUrl = () => {
-  return '/api';
+  // 1. If VITE_API_URL is explicitly set (e.g., pointing to Render/Heroku), use it.
+  if (process.env.VITE_API_URL) {
+      return process.env.VITE_API_URL;
+  }
+  
+  // 2. If we are running locally (Development), use the proxy.
+  // We use window.location check because process.env.NODE_ENV might be 'production' during build
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+      return '/api';
+  }
+
+  // 3. If hosted (Production) but no URL set, return null to signal "Simulation Mode Only"
+  return null;
 };
 
 const API_BASE_URL = getApiBaseUrl();
@@ -122,6 +133,13 @@ export const generateInitialData = (count: number = 200, symbol: string = 'BTCUS
 export const fetchHistoricalData = async (symbol: string, interval: string = '1m', limit: number = 200): Promise<PriceData[]> => {
   // --- FYERS INTEGRATION (Via Backend Proxy) ---
   if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
+    
+    // Check if Backend is Configured. If not, fallback immediately to simulation.
+    if (!API_BASE_URL) {
+        console.warn(`[MarketSim] No backend configured for ${symbol}. Using Simulation.`);
+        return generateInitialData(limit, symbol, interval);
+    }
+
     try {
       const resolutionMap: Record<string, string> = { '1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240', '1d': 'D' };
       const intervalSeconds: Record<string, number> = {
@@ -171,7 +189,7 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
     return generateInitialData(limit, symbol, interval);
   }
 
-  // --- BINANCE INTEGRATION ---
+  // --- BINANCE INTEGRATION (Direct from Client) ---
   if (!symbol.endsWith('USDT')) {
     return generateInitialData(limit, symbol, interval);
   }
@@ -201,30 +219,33 @@ export const fetchHistoricalData = async (symbol: string, interval: string = '1m
 export const fetchLatestQuote = async (symbol: string, interval: string = '1m', prevData?: PriceData[]): Promise<PriceData | null> => {
   // --- FYERS INTEGRATION ---
   if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
-      try {
-        const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
-        const res = await fetch(url);
-        if (res.ok) {
-            const json = await res.json();
-            if (json.d && json.d[0]) {
-                const d = json.d[0].v;
-                const price = d.lp;
-                const now = new Date();
-                
-                SIMULATED_STATE[symbol] = price; // Sync state
-                
-                return {
-                    time: formatTime(now),
-                    timestamp: now.getTime() / 1000,
-                    price: price,
-                    open: price,
-                    high: price,
-                    low: price,
-                    volume: d.volume
+      // Backend Check
+      if (API_BASE_URL) {
+          try {
+            const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const json = await res.json();
+                if (json.d && json.d[0]) {
+                    const d = json.d[0].v;
+                    const price = d.lp;
+                    const now = new Date();
+                    
+                    SIMULATED_STATE[symbol] = price; // Sync state
+                    
+                    return {
+                        time: formatTime(now),
+                        timestamp: now.getTime() / 1000,
+                        price: price,
+                        open: price,
+                        high: price,
+                        low: price,
+                        volume: d.volume
+                    }
                 }
             }
-        }
-      } catch (e) {}
+          } catch (e) {}
+      }
       
       // Fallback Simulation
       if (prevData && prevData.length > 0) {
@@ -292,21 +313,23 @@ export const fetchLatestQuote = async (symbol: string, interval: string = '1m', 
 export const fetchTicker = async (symbol: string): Promise<{ price: number; changePercent: number } | null> => {
   // --- FYERS INTEGRATION ---
   if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
-     try {
-         const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
-         const res = await fetch(url);
-         if (res.ok) {
-             const json = await res.json();
-             if (json.d && json.d[0]) {
-                 const d = json.d[0].v;
-                 SIMULATED_STATE[symbol] = d.lp; // Sync state
-                 return {
-                     price: d.lp,
-                     changePercent: d.chp
-                 };
+     if (API_BASE_URL) {
+         try {
+             const url = `${API_BASE_URL}/quotes?symbols=${symbol}`;
+             const res = await fetch(url);
+             if (res.ok) {
+                 const json = await res.json();
+                 if (json.d && json.d[0]) {
+                     const d = json.d[0].v;
+                     SIMULATED_STATE[symbol] = d.lp; // Sync state
+                     return {
+                         price: d.lp,
+                         changePercent: d.chp
+                     };
+                 }
              }
-         }
-     } catch (e) {}
+         } catch (e) {}
+     }
      
      // Fallback using State
      const base = getSeedPrice(symbol);
@@ -365,4 +388,20 @@ export const mergeQuote = (prevData: PriceData[], quote: PriceData): PriceData[]
     newData = [...prevData, quote];
   }
   return calculateIndicators(newData.slice(-200));
+};
+
+export const getFeedStatus = (symbol: string): 'LIVE' | 'SIMULATION' => {
+  // 1. Check if it's an Indian Market Symbol (NSE/BSE)
+  if (symbol.startsWith('NSE:') || symbol.startsWith('BSE:')) {
+    // If we have a backend URL configured, we consider it LIVE capability.
+    return API_BASE_URL ? 'LIVE' : 'SIMULATION';
+  }
+
+  // 2. Check if it's a Crypto Pair (Binance)
+  if (symbol.endsWith('USDT')) {
+      return 'LIVE';
+  }
+
+  // 3. Fallback
+  return 'SIMULATION';
 };
