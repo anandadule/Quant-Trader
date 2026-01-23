@@ -216,6 +216,9 @@ export default function App() {
   const marketInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const aiInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Derived state to force expansion on mobile when menu is open
+  const isCollapsedMode = isSidebarCollapsed && !isSidebarOpen;
+
   const notify = useCallback((msg: string, type: 'info' | 'success' | 'error' = 'info') => {
     setNotifications(prev => [{ msg, type }, ...prev].slice(0, 5));
   }, []);
@@ -462,6 +465,10 @@ export default function App() {
 
     if (session?.user) {
         await db.upsertPortfolio(session.user.id, emptyPortfolio);
+        // Wipe all associated data for the user from Supabase
+        await supabase.from('trades').delete().eq('user_id', session.user.id);
+        await supabase.from('ai_analysis_logs').delete().eq('user_id', session.user.id);
+        await supabase.from('equity_history').delete().eq('user_id', session.user.id);
     }
   }, [notify, session, addLog]);
 
@@ -606,8 +613,6 @@ export default function App() {
     }
   };
 
-  // Missing Function Implementations and Effects
-  
   const marketDataRef = useRef<PriceData[]>([]);
   useEffect(() => { marketDataRef.current = marketData; }, [marketData]);
 
@@ -1128,8 +1133,8 @@ export default function App() {
       {/* Sidebar */}
       <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r transition-all duration-300 w-96 max-w-[85vw] md:static ${isSidebarCollapsed ? 'md:w-20' : 'md:w-96'} ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${preferences.darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-200 bg-white'}`}>
          {/* Header / Toggle */}
-         <div className={`p-4 border-b flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} ${preferences.darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-             {!isSidebarCollapsed && (
+         <div className={`p-4 border-b flex items-center ${isCollapsedMode ? 'md:justify-center' : 'justify-between'} ${preferences.darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
+             {(!isCollapsedMode) && (
                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20 text-slate-950"><TrendingUp className="w-6 h-6" /></div>
                     <div><h1 className={`text-2xl font-black tracking-tight leading-none ${preferences.darkMode ? 'text-white' : 'text-slate-900'}`}>ProTrader</h1><span className="text-[11px] font-black text-emerald-500 uppercase tracking-widest">Quant</span></div>
@@ -1146,7 +1151,7 @@ export default function App() {
 
          {/* Watchlist Section */}
          <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col min-h-0">
-             {!isSidebarCollapsed && (
+             {(!isCollapsedMode) && (
                  <div className="px-4 pt-6 pb-2 space-y-3">
                     <div className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center justify-between">
                         <span>Watchlist</span>
@@ -1169,10 +1174,10 @@ export default function App() {
                      <button 
                         key={item.symbol} 
                         onClick={() => handleSymbolChange(item.symbol)}
-                        className={`w-full rounded-xl transition-all border group relative ${isSidebarCollapsed ? 'p-2 flex justify-center aspect-square items-center' : 'p-3 text-left flex justify-between items-center'} ${currentSymbol === item.symbol ? 'bg-emerald-500/10 border-emerald-500/20' : 'border-transparent hover:bg-slate-900 dark:hover:bg-slate-100'} ${!preferences.darkMode && currentSymbol !== item.symbol ? 'hover:bg-slate-100' : ''}`}
-                        title={isSidebarCollapsed ? `${item.name} ($${item.price})` : ''}
+                        className={`w-full rounded-xl transition-all border group relative ${isCollapsedMode ? 'p-2 flex justify-center aspect-square items-center' : 'p-3 text-left flex justify-between items-center'} ${currentSymbol === item.symbol ? 'bg-emerald-500/10 border-emerald-500/20' : 'border-transparent hover:bg-slate-900 dark:hover:bg-slate-100'} ${!preferences.darkMode && currentSymbol !== item.symbol ? 'hover:bg-slate-100' : ''}`}
+                        title={isCollapsedMode ? `${item.name} ($${item.price})` : ''}
                      >
-                         {isSidebarCollapsed ? (
+                         {isCollapsedMode ? (
                              <div className="flex flex-col items-center gap-1">
                                 <span className={`text-[10px] font-black ${currentSymbol === item.symbol ? 'text-emerald-400' : 'text-slate-400'}`}>{item.symbol.substring(0,3)}</span>
                                 <div className={`w-1.5 h-1.5 rounded-full ${item.change24h >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
@@ -1198,36 +1203,36 @@ export default function App() {
          <div className={`p-2 border-t ${preferences.darkMode ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-slate-50'}`}>
              <div className="grid gap-2">
                  {/* Dashboard Link */}
-                 <button onClick={() => setView('dashboard')} className={`flex items-center gap-3 p-3 rounded-xl transition-all ${view === 'dashboard' && !isSidebarCollapsed ? (preferences.darkMode ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-900') : 'text-slate-400 hover:bg-slate-800 hover:text-white dark:hover:bg-slate-200 dark:hover:text-slate-900'} ${isSidebarCollapsed ? 'justify-center' : ''}`}>
+                 <button onClick={() => setView('dashboard')} className={`flex items-center gap-3 p-3 rounded-xl transition-all ${view === 'dashboard' && !isCollapsedMode ? (preferences.darkMode ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-900') : 'text-slate-400 hover:bg-slate-800 hover:text-white dark:hover:bg-slate-200 dark:hover:text-slate-900'} ${isCollapsedMode ? 'justify-center' : ''}`}>
                      <LayoutDashboard className="w-5 h-5" />
-                     {!isSidebarCollapsed && <span className="text-sm font-bold">Terminal</span>}
+                     {!isCollapsedMode && <span className="text-sm font-bold">Terminal</span>}
                  </button>
                  
                  {/* Settings Link (Restored) */}
-                 <button onClick={() => setView('settings')} className={`flex items-center gap-3 p-3 rounded-xl transition-all ${view === 'settings' && !isSidebarCollapsed ? (preferences.darkMode ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-900') : 'text-slate-400 hover:bg-slate-800 hover:text-white dark:hover:bg-slate-200 dark:hover:text-slate-900'} ${isSidebarCollapsed ? 'justify-center' : ''}`}>
+                 <button onClick={() => setView('settings')} className={`flex items-center gap-3 p-3 rounded-xl transition-all ${view === 'settings' && !isCollapsedMode ? (preferences.darkMode ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-900') : 'text-slate-400 hover:bg-slate-800 hover:text-white dark:hover:bg-slate-200 dark:hover:text-slate-900'} ${isCollapsedMode ? 'justify-center' : ''}`}>
                      <Settings className="w-5 h-5" />
-                     {!isSidebarCollapsed && <span className="text-sm font-bold">Settings</span>}
+                     {!isCollapsedMode && <span className="text-sm font-bold">Settings</span>}
                  </button>
 
                  {/* Strategies (Restored All) */}
-                 {!isSidebarCollapsed && <div className="px-2 mt-2 text-[10px] font-black text-slate-600 uppercase tracking-widest">Active Engine</div>}
+                 {!isCollapsedMode && <div className="px-2 mt-2 text-[10px] font-black text-slate-600 uppercase tracking-widest">Active Engine</div>}
                  <div className="flex flex-col gap-1">
                      {STRATEGIES.map(s => (
                          <button 
                             key={s} 
                             onClick={() => setActiveStrategy(s)}
-                            className={`flex items-center gap-3 p-3 rounded-xl transition-all border ${activeStrategy === s ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-900 dark:hover:bg-slate-200'} ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                            title={isSidebarCollapsed ? getStrategyName(s) : ''}
+                            className={`flex items-center gap-3 p-3 rounded-xl transition-all border ${activeStrategy === s ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-900 dark:hover:bg-slate-200'} ${isCollapsedMode ? 'justify-center' : ''}`}
+                            title={isCollapsedMode ? getStrategyName(s) : ''}
                          >
                              {getStrategyIcon(s)}
-                             {!isSidebarCollapsed && <span className="text-sm font-bold truncate">{getStrategyName(s)}</span>}
+                             {!isCollapsedMode && <span className="text-sm font-bold truncate">{getStrategyName(s)}</span>}
                          </button>
                      ))}
                  </div>
 
                  {/* Autopilot Toggle - Metallic Skeuomorphic */}
-                 <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} p-3 rounded-xl border mt-2 ${preferences.darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200'}`}>
-                     {!isSidebarCollapsed && (
+                 <div className={`flex items-center ${isCollapsedMode ? 'justify-center' : 'justify-between'} p-3 rounded-xl border mt-2 ${preferences.darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200'}`}>
+                     {!isCollapsedMode && (
                          <div className="flex items-center gap-3">
                              <Cpu className={`w-6 h-6 ${mode === TradingMode.AUTO ? 'text-emerald-400' : 'text-slate-500'}`} />
                              <span className={`text-base font-black ${preferences.darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Autopilot</span>
@@ -1374,131 +1379,133 @@ export default function App() {
                           
                           {isOpenPositionsExpanded && (
                             portfolio.positions.length > 0 ? (
-                                <div className="w-full">
-                                    {/* Table Header */}
-                                    <div className={`grid grid-cols-12 mb-3 px-4 gap-2 border-b pb-2 ${preferences.darkMode ? 'border-slate-800/50' : 'border-slate-200'}`}>
-                                        <div className="col-span-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Asset Matrix</div>
-                                        <div className="col-span-2 text-[10px] font-black text-slate-500 uppercase tracking-widest">Quantity</div>
-                                        <div className="col-span-2 text-[10px] font-black text-slate-500 uppercase tracking-widest">Entry / Liq</div>
-                                        <div className="col-span-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Targets (TP / SL)</div>
-                                        <div className="col-span-2 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Manage</div>
-                                    </div>
+                                <div className="w-full overflow-x-auto">
+                                    <div className="min-w-[600px]">
+                                        {/* Table Header */}
+                                        <div className={`grid grid-cols-12 mb-3 px-4 gap-2 border-b pb-2 ${preferences.darkMode ? 'border-slate-800/50' : 'border-slate-200'}`}>
+                                            <div className="col-span-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Asset Matrix</div>
+                                            <div className="col-span-1 text-[10px] font-black text-slate-500 uppercase tracking-widest">Qty</div>
+                                            <div className="col-span-2 text-[10px] font-black text-slate-500 uppercase tracking-widest">Entry / Liq</div>
+                                            <div className="col-span-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Targets</div>
+                                            <div className="col-span-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Manage</div>
+                                        </div>
 
-                                    {/* Scrollable Container for Rows */}
-                                    <div className="space-y-0 max-h-[300px] overflow-y-auto custom-scrollbar">
-                                        {portfolio.positions.map(pos => {
-                                            const mark = priceMap[pos.symbol] || pos.entryPrice;
-                                            const pnl = (mark - pos.entryPrice) * pos.amount * (pos.type === 'LONG' ? 1 : -1);
-                                            const margin = (pos.entryPrice * pos.amount) / pos.leverage;
-                                            const pnlPercent = ((mark - pos.entryPrice) / pos.entryPrice) * 100 * (pos.type === 'LONG' ? 1 : -1) * pos.leverage;
-                                            const liqPrice = pos.type === 'LONG' 
-                                                ? pos.entryPrice * (1 - 1/pos.leverage)
-                                                : pos.entryPrice * (1 + 1/pos.leverage);
-                                                
-                                            const tpPrice = pos.takeProfitPct 
-                                                ? getPriceFromRoi(pos.takeProfitPct, pos.entryPrice, pos.leverage, pos.type)
-                                                : 0;
-                                            const slPrice = pos.stopLossPct
-                                                ? getPriceFromRoi(-pos.stopLossPct, pos.entryPrice, pos.leverage, pos.type)
-                                                : 0;
+                                        {/* Scrollable Container for Rows */}
+                                        <div className="space-y-0 max-h-[300px] overflow-y-auto custom-scrollbar">
+                                            {portfolio.positions.map(pos => {
+                                                const mark = priceMap[pos.symbol] || pos.entryPrice;
+                                                const pnl = (mark - pos.entryPrice) * pos.amount * (pos.type === 'LONG' ? 1 : -1);
+                                                const margin = (pos.entryPrice * pos.amount) / pos.leverage;
+                                                const pnlPercent = ((mark - pos.entryPrice) / pos.entryPrice) * 100 * (pos.type === 'LONG' ? 1 : -1) * pos.leverage;
+                                                const liqPrice = pos.type === 'LONG' 
+                                                    ? pos.entryPrice * (1 - 1/pos.leverage)
+                                                    : pos.entryPrice * (1 + 1/pos.leverage);
+                                                    
+                                                const tpPrice = pos.takeProfitPct 
+                                                    ? getPriceFromRoi(pos.takeProfitPct, pos.entryPrice, pos.leverage, pos.type)
+                                                    : 0;
+                                                const slPrice = pos.stopLossPct
+                                                    ? getPriceFromRoi(-pos.stopLossPct, pos.entryPrice, pos.leverage, pos.type)
+                                                    : 0;
 
-                                            return (
-                                                <div key={pos.id} className={`grid grid-cols-12 items-center p-4 border-b transition-all gap-2 group ${preferences.darkMode ? 'border-slate-800 hover:bg-slate-900/30' : 'border-slate-100 hover:bg-slate-50'}`}>
-                                                    {/* Asset Matrix (3) */}
-                                                    <div className="col-span-3 flex items-center gap-3">
-                                                        <div className={`w-2 h-2 rounded-full ${pos.type === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                                                        <div>
-                                                            <div className={`text-sm font-black ${preferences.darkMode ? 'text-white' : 'text-slate-900'}`}>{pos.symbol}</div>
-                                                            <div className={`text-[10px] font-black uppercase mt-0.5 ${pos.type === 'LONG' ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                                                {pos.type} {pos.leverage}X
+                                                return (
+                                                    <div key={pos.id} className={`grid grid-cols-12 items-center p-4 border-b transition-all gap-2 group ${preferences.darkMode ? 'border-slate-800 hover:bg-slate-900/30' : 'border-slate-100 hover:bg-slate-50'}`}>
+                                                        {/* Asset Matrix (3) */}
+                                                        <div className="col-span-3 flex items-center gap-3">
+                                                            <div className={`w-2 h-2 rounded-full ${pos.type === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                            <div className="min-w-0">
+                                                                <div className={`text-sm font-black truncate ${preferences.darkMode ? 'text-white' : 'text-slate-900'}`}>{pos.symbol}</div>
+                                                                <div className={`text-[10px] font-black uppercase mt-0.5 truncate ${pos.type === 'LONG' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                                                    {pos.type} {pos.leverage}X
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Quantity (1) */}
+                                                        <div className={`col-span-1 text-sm font-mono font-bold truncate ${preferences.darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                                                            {pos.amount}
+                                                        </div>
+
+                                                        {/* Entry / Liq (2) */}
+                                                        <div className="col-span-2">
+                                                            <div className={`text-sm font-mono font-black ${preferences.darkMode ? 'text-white' : 'text-slate-900'}`}>${pos.entryPrice.toLocaleString()}</div>
+                                                            <div className="text-[10px] font-mono font-bold text-orange-400 mt-0.5">Liq: ${liqPrice.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
+                                                        </div>
+
+                                                        {/* Targets (3) */}
+                                                        <div className="col-span-3 flex flex-col gap-1 pr-2">
+                                                            {/* TP ROW */}
+                                                            <div className={`flex items-center border rounded overflow-hidden ${preferences.darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                                                                <div className={`px-1.5 py-0.5 border-r ${preferences.darkMode ? 'bg-emerald-950/30 border-slate-800' : 'bg-emerald-50 border-slate-200'}`}>
+                                                                    <span className="text-[9px] font-black text-emerald-500">TP</span>
+                                                                </div>
+                                                                <div className="px-1 py-0.5 flex-1 flex justify-between items-center overflow-hidden">
+                                                                    <span className="text-[9px] font-bold text-emerald-500 truncate">{pos.takeProfitPct ? `${pos.takeProfitPct.toFixed(0)}%` : '-'}</span>
+                                                                    <span className={`text-[9px] font-mono font-bold border-l pl-1 truncate ${preferences.darkMode ? 'text-slate-300 border-slate-800' : 'text-slate-700 border-slate-200'}`}>
+                                                                        {pos.takeProfitPct ? `$${tpPrice.toLocaleString(undefined, {maximumFractionDigits: 0})}` : ''}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            {/* SL ROW */}
+                                                            <div className={`flex items-center border rounded overflow-hidden ${preferences.darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                                                                <div className={`px-1.5 py-0.5 border-r ${preferences.darkMode ? 'bg-rose-950/30 border-slate-800' : 'bg-rose-50 border-slate-200'}`}>
+                                                                    <span className="text-[9px] font-black text-rose-500">SL</span>
+                                                                </div>
+                                                                <div className="px-1 py-0.5 flex-1 flex justify-between items-center overflow-hidden">
+                                                                    <span className="text-[9px] font-bold text-rose-500 truncate">{pos.stopLossPct ? `${pos.stopLossPct.toFixed(0)}%` : '-'}</span>
+                                                                    <span className={`text-[9px] font-mono font-bold border-l pl-1 truncate ${preferences.darkMode ? 'text-slate-300 border-slate-800' : 'text-slate-700 border-slate-200'}`}>
+                                                                        {pos.stopLossPct ? `$${slPrice.toLocaleString(undefined, {maximumFractionDigits: 0})}` : ''}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Unrealized PnL & Manage (3) */}
+                                                        <div className="col-span-3 flex items-center justify-between gap-2">
+                                                            <div className="text-left min-w-[60px]">
+                                                                <div className={`text-sm font-mono font-black ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                    ${pnl.toFixed(2)}
+                                                                </div>
+                                                                <div className={`text-[10px] font-mono font-bold ${pnl >= 0 ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>
+                                                                    {pnlPercent.toFixed(2)}%
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex items-center gap-1">
+                                                                <button 
+                                                                    onClick={() => setTargetModal({
+                                                                        isOpen: true,
+                                                                        positionId: pos.id,
+                                                                        symbol: pos.symbol,
+                                                                        entryPrice: pos.entryPrice,
+                                                                        leverage: pos.leverage,
+                                                                        type: pos.type,
+                                                                        slPrice: slPrice.toFixed(2),
+                                                                        tpPrice: tpPrice.toFixed(2)
+                                                                    })}
+                                                                    className={`p-2 rounded-lg transition-colors border ${preferences.darkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border-slate-700' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'}`}
+                                                                >
+                                                                    <Edit3 className="w-3 h-3"/>
+                                                                </button>
+                                                                <button 
+                                                                    onClick={() => handleClosePosition(pos.id)} 
+                                                                    className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white rounded-lg text-[10px] font-black uppercase tracking-wider border border-rose-500/20 transition-all shadow-sm"
+                                                                >
+                                                                    CLOSE
+                                                                </button>
                                                             </div>
                                                         </div>
                                                     </div>
-
-                                                    {/* Quantity (2) */}
-                                                    <div className={`col-span-2 text-sm font-mono font-bold ${preferences.darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                                                        {pos.amount}
-                                                    </div>
-
-                                                    {/* Entry / Liq (2) */}
-                                                    <div className="col-span-2">
-                                                        <div className={`text-sm font-mono font-black ${preferences.darkMode ? 'text-white' : 'text-slate-900'}`}>${pos.entryPrice.toLocaleString()}</div>
-                                                        <div className="text-[10px] font-mono font-bold text-orange-400 mt-0.5">Liq: ${liqPrice.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
-                                                    </div>
-
-                                                    {/* Targets (3) - New Design */}
-                                                    <div className="col-span-3 flex flex-col gap-1 pr-2">
-                                                        {/* TP ROW */}
-                                                        <div className={`flex items-center border rounded overflow-hidden ${preferences.darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-                                                            <div className={`px-1.5 py-0.5 border-r ${preferences.darkMode ? 'bg-emerald-950/30 border-slate-800' : 'bg-emerald-50 border-slate-200'}`}>
-                                                                <span className="text-[9px] font-black text-emerald-500">TP</span>
-                                                            </div>
-                                                            <div className="px-2 py-0.5 flex-1 flex justify-between items-center">
-                                                                <span className="text-[10px] font-bold text-emerald-500">{pos.takeProfitPct ? `${pos.takeProfitPct.toFixed(2)}%` : '--'}</span>
-                                                                <span className={`text-[10px] font-mono font-bold border-l pl-2 ${preferences.darkMode ? 'text-slate-300 border-slate-800' : 'text-slate-700 border-slate-200'}`}>
-                                                                    {pos.takeProfitPct ? `$${tpPrice.toLocaleString(undefined, {maximumFractionDigits: 0})}` : ''}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        {/* SL ROW */}
-                                                        <div className={`flex items-center border rounded overflow-hidden ${preferences.darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-                                                            <div className={`px-1.5 py-0.5 border-r ${preferences.darkMode ? 'bg-rose-950/30 border-slate-800' : 'bg-rose-50 border-slate-200'}`}>
-                                                                <span className="text-[9px] font-black text-rose-500">SL</span>
-                                                            </div>
-                                                            <div className="px-2 py-0.5 flex-1 flex justify-between items-center">
-                                                                <span className="text-[10px] font-bold text-rose-500">{pos.stopLossPct ? `${pos.stopLossPct.toFixed(2)}%` : '--'}</span>
-                                                                <span className={`text-[10px] font-mono font-bold border-l pl-2 ${preferences.darkMode ? 'text-slate-300 border-slate-800' : 'text-slate-700 border-slate-200'}`}>
-                                                                    {pos.stopLossPct ? `$${slPrice.toLocaleString(undefined, {maximumFractionDigits: 0})}` : ''}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    {/* Unrealized PnL & Manage (2) */}
-                                                    <div className="col-span-2 flex items-center justify-between gap-2">
-                                                        <div className="text-left min-w-[60px]">
-                                                            <div className={`text-sm font-mono font-black ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                                                ${pnl.toFixed(2)}
-                                                            </div>
-                                                            <div className={`text-[10px] font-mono font-bold ${pnl >= 0 ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>
-                                                                {pnlPercent.toFixed(2)}%
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex items-center gap-1">
-                                                            <button 
-                                                                onClick={() => setTargetModal({
-                                                                    isOpen: true,
-                                                                    positionId: pos.id,
-                                                                    symbol: pos.symbol,
-                                                                    entryPrice: pos.entryPrice,
-                                                                    leverage: pos.leverage,
-                                                                    type: pos.type,
-                                                                    slPrice: slPrice.toString(),
-                                                                    tpPrice: tpPrice.toString()
-                                                                })}
-                                                                className={`p-2 rounded-lg transition-colors border ${preferences.darkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border-slate-700' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'}`}
-                                                            >
-                                                                <Edit3 className="w-3 h-3"/>
-                                                            </button>
-                                                            <button 
-                                                                onClick={() => handleClosePosition(pos.id)} 
-                                                                className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white rounded-lg text-[10px] font-black uppercase tracking-wider border border-rose-500/20 transition-all shadow-sm"
-                                                            >
-                                                                CLOSE
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )
-                                        })}
-                                    </div>
-                                    <div className={`pt-3 border-t flex justify-end ${preferences.darkMode ? 'border-slate-800/50' : 'border-slate-200'}`}>
-                                         <button 
-                                            onClick={handleExitAll} 
-                                            className="px-4 py-2 bg-rose-500/10 text-rose-400 text-xs font-black uppercase tracking-widest rounded-lg hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20"
-                                        >
-                                            Exit All Positions
-                                        </button>
+                                                )
+                                            })}
+                                        </div>
+                                        <div className={`pt-3 border-t flex justify-end ${preferences.darkMode ? 'border-slate-800/50' : 'border-slate-200'}`}>
+                                            <button 
+                                                onClick={handleExitAll} 
+                                                className="px-4 py-2 bg-rose-500/10 text-rose-400 text-xs font-black uppercase tracking-widest rounded-lg hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20"
+                                            >
+                                                Exit All Positions
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             ) : (
@@ -1775,99 +1782,10 @@ export default function App() {
                       </div>
                   </div>
               </div>
-
-              {/* Operations Audit Section - Visual Dashboard */}
-              <div className="space-y-6 mb-8">
-                <h3 className="font-black text-sm text-slate-500 flex items-center gap-2 uppercase tracking-widest">
-                    <Clock className="w-4 h-4"/> Operations Audit
-                </h3>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    {/* Alpha Win Rate */}
-                    <div className={`border p-6 rounded-3xl shadow-lg relative overflow-hidden ${preferences.darkMode ? 'bg-[#0b1221] border-slate-800/60' : 'bg-white border-slate-200'}`}>
-                         <div className="absolute top-0 right-0 p-8 bg-emerald-500/5 rounded-full blur-xl pointer-events-none"></div>
-                         <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Alpha Win Rate</h4>
-                         <div className="text-3xl font-black text-emerald-400 tracking-tight">{stats.winRate.toFixed(1)}%</div>
-                    </div>
-
-                    {/* Total Ops */}
-                    <div className={`border p-6 rounded-3xl shadow-lg relative overflow-hidden ${preferences.darkMode ? 'bg-[#0b1221] border-slate-800/60' : 'bg-white border-slate-200'}`}>
-                         <div className="absolute top-0 right-0 p-8 bg-blue-500/5 rounded-full blur-xl pointer-events-none"></div>
-                         <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Total Ops</h4>
-                         <div className="text-3xl font-black text-blue-400 tracking-tight">{stats.total}</div>
-                    </div>
-
-                    {/* Drawdown */}
-                    <div className={`border p-6 rounded-3xl shadow-lg relative overflow-hidden ${preferences.darkMode ? 'bg-[#0b1221] border-slate-800/60' : 'bg-white border-slate-200'}`}>
-                         <div className="absolute top-0 right-0 p-8 bg-rose-500/5 rounded-full blur-xl pointer-events-none"></div>
-                         <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Drawdown</h4>
-                         <div className="text-3xl font-black text-rose-400 tracking-tight">{maxDrawdown.toFixed(2)}%</div>
-                    </div>
-
-                    {/* Risk Rating */}
-                    <div className={`border p-6 rounded-3xl shadow-lg relative overflow-hidden ${preferences.darkMode ? 'bg-[#0b1221] border-slate-800/60' : 'bg-white border-slate-200'}`}>
-                         <div className="absolute top-0 right-0 p-8 bg-purple-500/5 rounded-full blur-xl pointer-events-none"></div>
-                         <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Risk Rating</h4>
-                         <div className={`text-3xl font-black tracking-tight ${preferences.darkMode ? 'text-white' : 'text-slate-900'}`}>{riskRating}</div>
-                    </div>
-                </div>
-
-                {/* Equity Curve Chart */}
-                <div className={`border rounded-3xl p-6 shadow-xl h-[400px] ${preferences.darkMode ? 'bg-[#0b1221] border-slate-800/60' : 'bg-white border-slate-200'}`}>
-                     <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={equityHistory}>
-                            <defs>
-                                <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke={preferences.darkMode ? "#1e293b" : "#e2e8f0"} vertical={false} />
-                            <XAxis 
-                                dataKey="timestamp" 
-                                tickFormatter={(tick) => new Date(tick).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                stroke={preferences.darkMode ? "#475569" : "#94a3b8"}
-                                tick={{fontSize: 10, fontWeight: 700}}
-                                axisLine={false}
-                                tickLine={false}
-                                minTickGap={50}
-                            />
-                            <YAxis 
-                                domain={['auto', 'auto']} 
-                                orientation="left"
-                                stroke={preferences.darkMode ? "#475569" : "#94a3b8"}
-                                tick={{fontSize: 10, fontWeight: 700}}
-                                tickFormatter={(val) => `$${val.toLocaleString()}`}
-                                axisLine={false}
-                                tickLine={false}
-                            />
-                            <Tooltip 
-                                contentStyle={{
-                                    backgroundColor: preferences.darkMode ? '#0f172a' : '#ffffff', 
-                                    borderColor: preferences.darkMode ? '#1e293b' : '#e2e8f0', 
-                                    borderRadius: '12px', 
-                                    fontWeight: 'bold',
-                                    color: preferences.darkMode ? '#f8fafc' : '#0f172a'
-                                }}
-                                itemStyle={{color: '#10b981'}}
-                                labelStyle={{color: '#64748b'}}
-                                labelFormatter={(label) => new Date(label).toLocaleString()}
-                            />
-                            <Area 
-                                type="stepAfter" 
-                                dataKey="equity" 
-                                stroke="#10b981" 
-                                strokeWidth={3} 
-                                fillOpacity={1} 
-                                fill="url(#colorEquity)" 
-                                animationDuration={500}
-                            />
-                        </AreaChart>
-                     </ResponsiveContainer>
-                </div>
-              </div>
            </div>
-         ) : renderSettings()}
+         ) : (
+             renderSettings()
+         )}
       </main>
     </div>
   );
